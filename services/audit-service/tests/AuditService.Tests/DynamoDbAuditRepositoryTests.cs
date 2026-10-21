@@ -166,6 +166,52 @@ public class DynamoDbAuditRepositoryTests
     }
 
     [Fact]
+    public async Task QueryEventsAsync_WithOnlyToFilter_ShouldMapTimestampAlias()
+    {
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .ReturnsAsync(new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>>(),
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            });
+
+        var to = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc);
+        await _repository.QueryEventsAsync(null, null, null, null, null, to, 1, 20);
+
+        _mockDynamoDb.Verify(d => d.ScanAsync(It.Is<ScanRequest>(req =>
+            req.FilterExpression == "#ts <= :toTs" &&
+            req.ExpressionAttributeNames.Count == 1 &&
+            req.ExpressionAttributeNames["#ts"] == "Timestamp" &&
+            req.ExpressionAttributeValues[":toTs"].S == to.ToString("O")),
+            default), Times.Once);
+    }
+
+    [Fact]
+    public async Task QueryEventsAsync_WithFromAndToFilters_ShouldShareTimestampAlias()
+    {
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .ReturnsAsync(new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>>(),
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            });
+
+        var from = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var to = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc);
+        await _repository.QueryEventsAsync(null, null, null, null, from, to, 1, 20);
+
+        _mockDynamoDb.Verify(d => d.ScanAsync(It.Is<ScanRequest>(req =>
+            req.FilterExpression == "#ts >= :fromTs AND #ts <= :toTs" &&
+            req.ExpressionAttributeNames.Count == 1 &&
+            req.ExpressionAttributeNames["#ts"] == "Timestamp" &&
+            req.ExpressionAttributeValues[":fromTs"].S == from.ToString("O") &&
+            req.ExpressionAttributeValues[":toTs"].S == to.ToString("O")),
+            default), Times.Once);
+    }
+
+    [Fact]
     public async Task GetAllUserEventsAsync_ShouldFilterByUserId()
     {
         var items = new List<Dictionary<string, AttributeValue>>
