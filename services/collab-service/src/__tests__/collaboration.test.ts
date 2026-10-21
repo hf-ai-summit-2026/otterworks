@@ -172,6 +172,32 @@ describe('CollaborationManager', () => {
       client.disconnect();
     });
 
+    it.each([
+      ['missing documentId', {}],
+      ['empty documentId', { documentId: '' }],
+      ['whitespace documentId', { documentId: '   ' }],
+      ['non-string documentId', { documentId: 42 }],
+      ['null payload', null],
+    ])('should reject join-document with %s', async (_label, payload) => {
+      const client = await connectClient('user-join-invalid', 'Mallory');
+      const roomsBefore = manager.getDocumentCount();
+
+      const response = await new Promise<{ success: boolean; error?: string }>(
+        (resolve) => {
+          client.emit(
+            'join-document',
+            payload,
+            (res: { success: boolean; error?: string }) => resolve(res),
+          );
+        },
+      );
+
+      expect(response).toEqual({ success: false, error: 'Invalid documentId' });
+      expect(manager.getDocumentCount()).toBe(roomsBefore);
+      expect(mockRedis.get).not.toHaveBeenCalled();
+      client.disconnect();
+    });
+
     it('should sync document state to joining client', async () => {
       const client = await connectClient('user-sync-1', 'Bob');
 
