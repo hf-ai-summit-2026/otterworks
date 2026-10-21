@@ -61,7 +61,10 @@ alert name and the time it fired); do not ask what to do next.
    gate in its *before* mode until it confirms the alert fires and the numbers
    match what you saw in production. If it will not reproduce, stop and report
    that — it means the cause is environmental (data shape, a flag, a replica
-   count) and the fix belongs somewhere else.
+   count) and the fix belongs somewhere else. When the paging service has a
+   user-facing page (the Skill says how to bring the web app up), open that page
+   in your own browser and screen-record it being slow under the armed load,
+   with the request's timing visible in DevTools — that is what users saw.
 4. **Find the cause in code, guided by the trace.** Follow the span names and
    SQL text back to the function that emits them. Check `git log -S` on that
    file for when the behavior arrived and whether it was known (a deferred
@@ -76,14 +79,16 @@ alert name and the time it fired); do not ask what to do next.
    alert clearing and the after-thresholds. Capture the before and after
    numbers side by side (for example p95 2.4 s → 0.13 s, 104 → 5 SQL
    statements per request). A gate that refuses to run because the source is
-   unchanged is telling you that you have not deployed your fix yet.
+   unchanged is telling you that you have not deployed your fix yet. While the
+   load is still running, record the same page in the browser again, now fast.
 7. **Post the RCA in the alert's thread.** One message, in this order: what
    users saw, what the telemetry showed, the root cause with file and function,
    the fix in one sentence, the before/after numbers, and the PR link. Reply in
    the thread of the alert message — not a new message, not a DM.
 8. **Open the PR.** Title it after the alert. The body carries the RCA, the
-   two gate summary lines (before red → after green) and the report file names,
-   and states plainly that the load profile and thresholds came from the
+   two gate summary lines (before red → after green), the report file names and
+   the before/after browser recording (converted to an animated WebP and
+   embedded as an image; PR bodies reject raw video), and states plainly that the load profile and thresholds came from the
    repository's scenario catalog. Work on your own branch; never push to the
    branch that carries the reproducible before-state. The PR's base is the
    alert's `fix_branch` label when it carries one (the long-lived tenant branch
@@ -103,6 +108,9 @@ alert name and the time it fired); do not ask what to do next.
   exists), and the after gate went green on the fixed code under the same load
   profile. Both report files are named in the PR.
 - The alert that paged is inactive under the load that fired it.
+- When the service has a user-facing page, the PR carries a browser recording
+  of that page slow before the fix and fast after it, both under the armed load,
+  with the request timing visible.
 - The diff is small and reviewable: the causal change, a migration if the fix
   needs schema, and one regression test that fails on the old code. No unrelated
   changes.

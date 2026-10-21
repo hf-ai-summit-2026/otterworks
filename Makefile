@@ -1,4 +1,4 @@
-.PHONY: help infra-up infra-down up down build test test-coverage test-api-flows test-api-flows-collect lint deploy-dev teardown-dev seed wait-for-db security-scan test-report build-report testdata-validate testdata-clean testdata-setup-schema batch-usage-rollup batch-usage-rollup-seed dev-backend dev-web dev-admin dev-android dev-electron workbench-up workbench-down dast-list dast-scan dast-verify dast-baseline dast-zap procs-validate procs-up procs-down procs-record procs-list procs-parity procs-rules-gate insurance-up insurance-down insurance-test deps-inventory deps-gate deps-command deps-transcript deps-transcript-baseline deps-tests deps-record dast-coverage dast-routes dast-test eq-list eq-gate eq-baseline eq-verify eq-exploit eq-exploit-refactored eq-tests eq-record demo-up demo-migrate demo-destroy demo-verify-clean demo-reaper incident-up incident-down incident-arm incident-disarm incident-status incident-verify incident-load incident-seed incident-simulate incident-fingerprint incident-record incident-reset-fixture incident-chart-sync incident-chart-check arm disarm lp-up lp-replay lp-status lp-reset lp-down lp-verify-clean lp-ec2-up lp-ec2-status lp-ec2-replay lp-ec2-down lp-ec2-verify-clean lp-deploy lp-break lp-heal lp-page-status
+.PHONY: help infra-up infra-down up down build test test-coverage test-api-flows test-api-flows-collect lint deploy-dev teardown-dev seed wait-for-db security-scan test-report build-report testdata-validate testdata-clean testdata-setup-schema batch-usage-rollup batch-usage-rollup-seed dev-backend dev-web dev-admin dev-android dev-electron workbench-up workbench-down dast-list dast-scan dast-verify dast-baseline dast-zap procs-validate procs-up procs-down procs-record procs-list procs-parity procs-rules-gate insurance-up insurance-down insurance-test deps-inventory deps-gate deps-command deps-transcript deps-transcript-baseline deps-tests deps-record dast-coverage dast-routes dast-test eq-list eq-gate eq-baseline eq-verify eq-exploit eq-exploit-refactored eq-tests eq-record demo-up demo-migrate demo-destroy demo-verify-clean demo-reaper incident-up incident-ui-login incident-down incident-arm incident-disarm incident-status incident-verify incident-load incident-seed incident-simulate incident-fingerprint incident-record incident-reset-fixture incident-chart-sync incident-chart-check arm disarm lp-up lp-replay lp-status lp-reset lp-down lp-verify-clean lp-ec2-up lp-ec2-status lp-ec2-replay lp-ec2-down lp-ec2-verify-clean lp-deploy lp-break lp-heal lp-page-status
 
 SHELL := /bin/bash
 
@@ -480,6 +480,17 @@ endif
 
 incident-up: ## Start document-service + observability + Alertmanager for the incident demo (UI=1 adds gateway/web-app)
 	$(INCIDENT_COMPOSE) up -d --build $(INCIDENT_SERVICES)
+ifdef UI
+	@$(MAKE) --no-print-directory incident-ui-login
+endif
+
+incident-ui-login: ## Create the browser login for the fixture owner (oncall@otterworks.dev / OnCall-Demo-1)
+	@for i in $$(seq 60); do \
+	  $(INCIDENT_COMPOSE) exec -T postgres psql -U otterworks -d otterworks -tAc "select to_regclass('public.user_roles')" 2>/dev/null | grep -q user_roles && break; \
+	  sleep 2; \
+	done
+	$(INCIDENT_COMPOSE) exec -T postgres psql -v ON_ERROR_STOP=1 -q -U otterworks -d otterworks < incident/ui-login.sql
+	@echo "web-app: http://localhost:3000/documents  login: oncall@otterworks.dev / OnCall-Demo-1"
 
 incident-down: ## Stop the incident demo stack (keeps volumes)
 	$(INCIDENT_COMPOSE) --profile double-run down
