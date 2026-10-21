@@ -4,9 +4,9 @@ from uuid import UUID
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from pymongo.asynchronous.database import AsyncDatabase
 
-from app.db.session import get_db
+from app.db.mongo import get_db
 from app.schemas.document import CommentCreate, CommentResponse
 from app.services.document_service import DocumentService
 
@@ -22,7 +22,7 @@ router = APIRouter()
 async def add_comment(
     document_id: UUID,
     body: CommentCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Add a comment to a document."""
     service = DocumentService(db)
@@ -36,7 +36,7 @@ async def add_comment(
 @router.get("/{document_id}/comments", response_model=list[CommentResponse])
 async def list_comments(
     document_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """List comments for a document."""
     service = DocumentService(db)
@@ -50,7 +50,7 @@ async def list_comments(
 async def delete_comment(
     document_id: UUID,
     comment_id: UUID,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Delete a comment."""
     service = DocumentService(db)

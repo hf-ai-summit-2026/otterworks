@@ -1,17 +1,20 @@
 """Metadata filtering for the document list endpoint.
 
 The list endpoint supports ad-hoc metadata filters (title fragment, content
-type) and caller-chosen ordering. The repository builds the predicate list for
-those filters and reads the ``documents`` table directly.
+type) and caller-chosen ordering. The repository builds the MongoDB filter for
+those and reads the ``documents`` collection directly.
 """
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import structlog
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from pymongo import ASCENDING, DESCENDING
+from pymongo.asynchronous.database import AsyncDatabase
+
+from app.models.document import DOCUMENTS
 
 logger = structlog.get_logger()
 
@@ -29,31 +32,33 @@ COLUMNS = (
     "created_at",
     "updated_at",
 )
+DIRECTIONS = {"asc": ASCENDING, "desc": DESCENDING}
 
 
 class DocumentQueryRepository:
-    """Reads the document table for the list endpoint's metadata filters."""
+    """Reads the documents collection for the list endpoint's metadata filters."""
 
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncDatabase):
         self.db = db
+        self.documents = db[DOCUMENTS]
 
-    def _where(
+    def _filter(
         self,
         owner_id: str | None,
         title_contains: str | None,
         content_type: str | None,
         folder_id: str | None = None,
-    ) -> str:
-        clauses = ["is_deleted = false", "is_template = false"]
+    ) -> dict[str, Any]:
+        query: dict[str, Any] = {"is_deleted": False, "is_template": False}
         if owner_id:
-            clauses.append(f"owner_id = '{owner_id}'")
+            query["owner_id"] = owner_id
         if folder_id:
-            clauses.append(f"folder_id = '{folder_id}'")
+            query["folder_id"] = folder_id
         if title_contains:
-            clauses.append(f"lower(title) LIKE lower('%{title_contains}%')")
+            query["title"] = {"$regex": re.escape(title_contains), "$options": "i"}
         if content_type:
-            clauses.append(f"content_type = '{content_type}'")
-        return " AND ".join(clauses)
+            query["content_type"] = content_type
+        return query
 
     async def count_documents(
         self,
@@ -64,16 +69,9 @@ class DocumentQueryRepository:
         folder_id: str | None = None,
     ) -> int:
         """Count documents matching the metadata filters."""
-        sql = (
-            "SELECT count(*) FROM documents WHERE "
-            + self._where(owner_id, title_contains, content_type, folder_id)
+        return await self.documents.count_documents(
+            self._filter(owner_id, title_contains, content_type, folder_id)
         )
-        # The interpolated statement is the OW-SEC-401 lab fixture (see
-        # security/equivalence/findings.yaml); the refactor removes the
-        # interpolation and this suppression together.
-        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
-        result = await self.db.execute(text(sql))
-        return int(result.scalar_one())
 
     async def search_documents(
         self,
@@ -87,16 +85,25 @@ class DocumentQueryRepository:
         limit: int = 20,
         offset: int = 0,
     ) -> list[dict[str, Any]]:
-        """Return document rows matching the metadata filters, newest first."""
-        sql = (
-            f"SELECT {', '.join(COLUMNS)} FROM documents WHERE "
-            + self._where(owner_id, title_contains, content_type, folder_id)
-            + f" ORDER BY {sort} {direction} LIMIT {limit} OFFSET {offset}"
-        )
+        """Return document rows matching the metadata filters in the requested order.
+
+        Raises ``ValueError`` for a sort column or direction the API does not expose.
+        """
+        if sort not in COLUMNS:
+            raise ValueError(f"unknown sort column: {sort!r}")
+        if direction not in DIRECTIONS:
+            raise ValueError(f"unknown sort direction: {direction!r}")
         logger.debug("document_filter_query", sort=sort, direction=direction)
-        # The interpolated statement is the OW-SEC-401 lab fixture (see
-        # security/equivalence/findings.yaml); the refactor removes the
-        # interpolation and this suppression together.
-        # nosemgrep: python.sqlalchemy.security.audit.avoid-sqlalchemy-text.avoid-sqlalchemy-text
-        result = await self.db.execute(text(sql))
-        return [dict(row._mapping) for row in result]
+        sort_key = "_id" if sort == "id" else sort
+        cursor = (
+            self.documents.find(self._filter(owner_id, title_contains, content_type, folder_id))
+            .sort(sort_key, DIRECTIONS[direction])
+            .skip(offset)
+            .limit(limit)
+        )
+        rows: list[dict[str, Any]] = []
+        async for doc in cursor:
+            row = {column: doc.get(column) for column in COLUMNS if column != "id"}
+            row["id"] = doc["_id"]
+            rows.append(row)
+        return rows

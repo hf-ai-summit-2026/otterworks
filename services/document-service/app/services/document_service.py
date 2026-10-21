@@ -1,14 +1,27 @@
-"""Document business logic service."""
+"""Document business logic service backed by MongoDB."""
 
 import html as html_mod
 import math
+import re
+from collections import defaultdict
+from typing import Any
 from uuid import UUID
 
 import structlog
-from sqlalchemy import func, or_, select
-from sqlalchemy.ext.asyncio import AsyncSession
+from pymongo import ASCENDING, DESCENDING, ReturnDocument
+from pymongo.asynchronous.database import AsyncDatabase
 
-from app.models.document import Comment, Document, DocumentVersion, Template
+from app.models.document import (
+    COMMENTS,
+    DOCUMENT_VERSIONS,
+    DOCUMENTS,
+    TEMPLATES,
+    Comment,
+    Document,
+    DocumentVersion,
+    Template,
+    _utcnow,
+)
 from app.schemas.document import (
     CommentCreate,
     DocumentCreate,
@@ -20,6 +33,9 @@ from app.schemas.document import (
 from app.services.event_publisher import event_publisher
 
 logger = structlog.get_logger()
+
+RECENT_VERSIONS = 5
+LIVE_DOCUMENT = {"is_deleted": False, "is_template": False}
 
 
 def _word_count(text: str) -> int:
@@ -39,8 +55,12 @@ def _document_index_payload(document: Document) -> dict[str, object]:
 
 
 class DocumentService:
-    def __init__(self, db: AsyncSession):
+    def __init__(self, db: AsyncDatabase):
         self.db = db
+        self.documents = db[DOCUMENTS]
+        self.versions = db[DOCUMENT_VERSIONS]
+        self.comments = db[COMMENTS]
+        self.templates = db[TEMPLATES]
 
     # ---- Document CRUD ----
 
@@ -54,19 +74,8 @@ class DocumentService:
             word_count=_word_count(data.content),
             version=1,
         )
-        self.db.add(document)
-        await self.db.flush()
-
-        version = DocumentVersion(
-            document_id=document.id,
-            version_number=1,
-            title=data.title,
-            content=data.content,
-            created_by=data.owner_id,
-        )
-        self.db.add(version)
-        await self.db.commit()
-        await self.db.refresh(document)
+        await self.documents.insert_one(document.to_doc())
+        await self._add_version(document, created_by=data.owner_id)
 
         await event_publisher.publish(
             "document_created",
@@ -75,12 +84,8 @@ class DocumentService:
         return document
 
     async def get(self, document_id: UUID) -> Document | None:
-        result = await self.db.execute(
-            select(Document).where(
-                Document.id == document_id, Document.is_deleted.is_(False)
-            )
-        )
-        return result.scalar_one_or_none()
+        doc = await self.documents.find_one({"_id": str(document_id), "is_deleted": False})
+        return Document.from_doc(doc) if doc else None
 
     async def list_documents(
         self,
@@ -89,31 +94,33 @@ class DocumentService:
         page: int = 1,
         size: int = 20,
     ) -> tuple[list[Document], int]:
-        base = select(Document).where(
-            Document.is_deleted.is_(False), Document.is_template.is_(False)
-        )
+        query: dict[str, Any] = dict(LIVE_DOCUMENT)
         if owner_id:
-            base = base.where(Document.owner_id == owner_id)
+            query["owner_id"] = str(owner_id)
         if folder_id:
-            base = base.where(Document.folder_id == folder_id)
+            query["folder_id"] = str(folder_id)
 
-        count_q = select(func.count()).select_from(base.subquery())
-        total = (await self.db.execute(count_q)).scalar_one()
+        total = await self.documents.count_documents(query)
+        cursor = (
+            self.documents.find(query)
+            .sort("updated_at", DESCENDING)
+            .skip((page - 1) * size)
+            .limit(size)
+        )
+        documents = [Document.from_doc(doc) async for doc in cursor]
 
-        query = base.order_by(Document.updated_at.desc())
-        query = query.offset((page - 1) * size).limit(size)
-        result = await self.db.execute(query)
-        documents = list(result.scalars().all())
-
-        # TODO: This is slow for large result sets (ETL-445, deferred Q2 2024)
+        # One query for the recent versions of the whole page (no per-document fan-out).
+        recent: dict[str, list[DocumentVersion]] = defaultdict(list)
+        if documents:
+            ver_cursor = self.versions.find(
+                {"document_id": {"$in": [str(d.id) for d in documents]}}
+            ).sort([("document_id", ASCENDING), ("version_number", DESCENDING)])
+            async for ver in ver_cursor:
+                bucket = recent[ver["document_id"]]
+                if len(bucket) < RECENT_VERSIONS:
+                    bucket.append(DocumentVersion.from_doc(ver))
         for doc in documents:
-            ver_result = await self.db.execute(
-                select(DocumentVersion)
-                .where(DocumentVersion.document_id == doc.id)
-                .order_by(DocumentVersion.version_number.desc())
-                .limit(5)
-            )
-            doc.recent_versions = list(ver_result.scalars().all())
+            doc.recent_versions = recent.get(str(doc.id), [])
 
         return documents, total
 
@@ -124,23 +131,15 @@ class DocumentService:
         if not document:
             return None
 
-        document.title = data.title
-        document.content = data.content
-        document.content_type = data.content_type
-        document.folder_id = data.folder_id
-        document.word_count = _word_count(data.content)
-        document.version += 1
-
-        version = DocumentVersion(
-            document_id=document.id,
-            version_number=document.version,
-            title=data.title,
-            content=data.content,
-            created_by=updated_by or document.owner_id,
-        )
-        self.db.add(version)
-        await self.db.commit()
-        await self.db.refresh(document)
+        changes = {
+            "title": data.title,
+            "content": data.content,
+            "content_type": data.content_type,
+            "folder_id": str(data.folder_id) if data.folder_id else None,
+            "word_count": _word_count(data.content),
+        }
+        document = await self._apply_revision(document, changes)
+        await self._add_version(document, created_by=updated_by or document.owner_id)
 
         await event_publisher.publish(
             "document_updated",
@@ -153,48 +152,35 @@ class DocumentService:
         if not document:
             return None
 
-        changed = False
+        changes: dict[str, Any] = {}
         if "title" in data.model_fields_set:
-            document.title = data.title
-            changed = True
+            changes["title"] = data.title
         if "content" in data.model_fields_set:
-            document.content = data.content
-            document.word_count = _word_count(data.content) if data.content else 0
-            changed = True
+            changes["content"] = data.content
+            changes["word_count"] = _word_count(data.content) if data.content else 0
         if "content_type" in data.model_fields_set:
-            document.content_type = data.content_type
-            changed = True
+            changes["content_type"] = data.content_type
         if "folder_id" in data.model_fields_set:
-            document.folder_id = data.folder_id
-            changed = True
+            changes["folder_id"] = str(data.folder_id) if data.folder_id else None
 
-        if changed:
-            document.version += 1
-            version = DocumentVersion(
-                document_id=document.id,
-                version_number=document.version,
-                title=document.title,
-                content=document.content,
-                created_by=document.owner_id,
-            )
-            self.db.add(version)
+        if not changes:
+            return document
 
-        await self.db.commit()
-        await self.db.refresh(document)
-
-        if changed:
-            await event_publisher.publish(
-                "document_updated",
-                _document_index_payload(document),
-            )
+        document = await self._apply_revision(document, changes)
+        await self._add_version(document, created_by=document.owner_id)
+        await event_publisher.publish(
+            "document_updated",
+            _document_index_payload(document),
+        )
         return document
 
     async def delete(self, document_id: UUID) -> bool:
-        document = await self.get(document_id)
-        if not document:
+        result = await self.documents.update_one(
+            {"_id": str(document_id), "is_deleted": False},
+            {"$set": {"is_deleted": True, "updated_at": _utcnow()}},
+        )
+        if result.matched_count == 0:
             return False
-        document.is_deleted = True
-        await self.db.commit()
 
         await event_publisher.publish(
             "document_deleted", {"id": document_id, "type": "document"}
@@ -204,12 +190,10 @@ class DocumentService:
     # ---- Versions ----
 
     async def list_versions(self, document_id: UUID) -> list[DocumentVersion]:
-        result = await self.db.execute(
-            select(DocumentVersion)
-            .where(DocumentVersion.document_id == document_id)
-            .order_by(DocumentVersion.version_number.asc())
+        cursor = self.versions.find({"document_id": str(document_id)}).sort(
+            "version_number", ASCENDING
         )
-        return list(result.scalars().all())
+        return [DocumentVersion.from_doc(v) async for v in cursor]
 
     async def restore_version(
         self, document_id: UUID, version_id: UUID
@@ -218,31 +202,20 @@ class DocumentService:
         if not document:
             return None
 
-        result = await self.db.execute(
-            select(DocumentVersion).where(
-                DocumentVersion.id == version_id,
-                DocumentVersion.document_id == document_id,
-            )
+        raw = await self.versions.find_one(
+            {"_id": str(version_id), "document_id": str(document_id)}
         )
-        ver = result.scalar_one_or_none()
-        if not ver:
+        if not raw:
             return None
+        ver = DocumentVersion.from_doc(raw)
 
-        document.title = ver.title
-        document.content = ver.content
-        document.word_count = _word_count(ver.content)
-        document.version += 1
-
-        new_ver = DocumentVersion(
-            document_id=document.id,
-            version_number=document.version,
-            title=ver.title,
-            content=ver.content,
-            created_by=document.owner_id,
-        )
-        self.db.add(new_ver)
-        await self.db.commit()
-        await self.db.refresh(document)
+        changes = {
+            "title": ver.title,
+            "content": ver.content,
+            "word_count": _word_count(ver.content),
+        }
+        document = await self._apply_revision(document, changes)
+        await self._add_version(document, created_by=document.owner_id)
 
         await event_publisher.publish(
             "document_updated",
@@ -258,23 +231,19 @@ class DocumentService:
     async def search(
         self, query: str, page: int = 1, size: int = 20
     ) -> tuple[list[Document], int]:
-        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        pattern = f"%{escaped}%"
-        base = select(Document).where(
-            Document.is_deleted.is_(False),
-            Document.is_template.is_(False),
-            or_(
-                Document.title.ilike(pattern),
-                Document.content.ilike(pattern),
-            ),
+        pattern = {"$regex": re.escape(query), "$options": "i"}
+        mongo_query: dict[str, Any] = {
+            **LIVE_DOCUMENT,
+            "$or": [{"title": pattern}, {"content": pattern}],
+        }
+        total = await self.documents.count_documents(mongo_query)
+        cursor = (
+            self.documents.find(mongo_query)
+            .sort("updated_at", DESCENDING)
+            .skip((page - 1) * size)
+            .limit(size)
         )
-        count_q = select(func.count()).select_from(base.subquery())
-        total = (await self.db.execute(count_q)).scalar_one()
-
-        q = base.order_by(Document.updated_at.desc())
-        q = q.offset((page - 1) * size).limit(size)
-        result = await self.db.execute(q)
-        return list(result.scalars().all()), total
+        return [Document.from_doc(d) async for d in cursor], total
 
     # ---- Export ----
 
@@ -309,9 +278,7 @@ class DocumentService:
             author_id=data.author_id,
             content=data.content,
         )
-        self.db.add(comment)
-        await self.db.commit()
-        await self.db.refresh(comment)
+        await self.comments.insert_one(comment.to_doc())
 
         await event_publisher.publish(
             "comment_added",
@@ -324,25 +291,16 @@ class DocumentService:
         return comment
 
     async def list_comments(self, document_id: UUID) -> list[Comment]:
-        result = await self.db.execute(
-            select(Comment)
-            .where(Comment.document_id == document_id)
-            .order_by(Comment.created_at.asc())
+        cursor = self.comments.find({"document_id": str(document_id)}).sort(
+            "created_at", ASCENDING
         )
-        return list(result.scalars().all())
+        return [Comment.from_doc(c) async for c in cursor]
 
     async def delete_comment(self, document_id: UUID, comment_id: UUID) -> bool:
-        result = await self.db.execute(
-            select(Comment).where(
-                Comment.id == comment_id, Comment.document_id == document_id
-            )
+        result = await self.comments.delete_one(
+            {"_id": str(comment_id), "document_id": str(document_id)}
         )
-        comment = result.scalar_one_or_none()
-        if not comment:
-            return False
-        await self.db.delete(comment)
-        await self.db.commit()
-        return True
+        return result.deleted_count == 1
 
     # ---- Templates ----
 
@@ -354,22 +312,16 @@ class DocumentService:
             content_type=data.content_type,
             created_by=data.created_by,
         )
-        self.db.add(template)
-        await self.db.commit()
-        await self.db.refresh(template)
+        await self.templates.insert_one(template.to_doc())
         return template
 
     async def list_templates(self) -> list[Template]:
-        result = await self.db.execute(
-            select(Template).order_by(Template.name.asc())
-        )
-        return list(result.scalars().all())
+        cursor = self.templates.find({}).sort("name", ASCENDING)
+        return [Template.from_doc(t) async for t in cursor]
 
     async def get_template(self, template_id: UUID) -> Template | None:
-        result = await self.db.execute(
-            select(Template).where(Template.id == template_id)
-        )
-        return result.scalar_one_or_none()
+        doc = await self.templates.find_one({"_id": str(template_id)})
+        return Template.from_doc(doc) if doc else None
 
     async def create_from_template(
         self, template_id: UUID, data: DocumentFromTemplate
@@ -388,6 +340,26 @@ class DocumentService:
         return await self.create(create_data)
 
     # ---- Helpers ----
+
+    async def _apply_revision(self, document: Document, changes: dict[str, Any]) -> Document:
+        """Apply `changes`, bump the version and refresh updated_at atomically."""
+        updated = await self.documents.find_one_and_update(
+            {"_id": str(document.id), "is_deleted": False},
+            {"$set": {**changes, "updated_at": _utcnow()}, "$inc": {"version": 1}},
+            return_document=ReturnDocument.AFTER,
+        )
+        return Document.from_doc(updated)
+
+    async def _add_version(self, document: Document, created_by: UUID) -> DocumentVersion:
+        version = DocumentVersion(
+            document_id=document.id,
+            version_number=document.version,
+            title=document.title,
+            content=document.content,
+            created_by=created_by,
+        )
+        await self.versions.insert_one(version.to_doc())
+        return version
 
     @staticmethod
     def paginate(total: int, page: int, size: int) -> int:
