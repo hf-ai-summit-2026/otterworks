@@ -165,6 +165,35 @@ public class DynamoDbAuditRepositoryTests
             default), Times.Once);
     }
 
+    [Theory]
+    [InlineData(true, false, "#ts >= :fromTs")]
+    [InlineData(false, true, "#ts <= :toTs")]
+    [InlineData(true, true, "#ts >= :fromTs AND #ts <= :toTs")]
+    public async Task QueryEventsAsync_WithDateRange_ShouldMapTimestampAttributeName(
+        bool withFrom, bool withTo, string expectedFilter)
+    {
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .ReturnsAsync(new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>>(),
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            });
+
+        DateTime? from = withFrom ? DateTime.UtcNow.AddDays(-7) : null;
+        DateTime? to = withTo ? DateTime.UtcNow : null;
+
+        await _repository.QueryEventsAsync(null, null, null, null, from, to, 1, 20);
+
+        _mockDynamoDb.Verify(d => d.ScanAsync(It.Is<ScanRequest>(req =>
+            req.FilterExpression == expectedFilter &&
+            req.ExpressionAttributeNames.Count == 1 &&
+            req.ExpressionAttributeNames["#ts"] == "Timestamp" &&
+            req.ExpressionAttributeValues.ContainsKey(":fromTs") == withFrom &&
+            req.ExpressionAttributeValues.ContainsKey(":toTs") == withTo),
+            default), Times.Once);
+    }
+
     [Fact]
     public async Task GetAllUserEventsAsync_ShouldFilterByUserId()
     {
