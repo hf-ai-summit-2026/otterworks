@@ -56,9 +56,6 @@ class MetricsAggregator
   end
 
   def self.calculate_average_usage
-    total = StorageQuota.count
-    return 0 if total.zero?
-
     StorageQuota.average('(used_bytes::float / NULLIF(quota_bytes, 0)) * 100')&.round(2) || 0
   end
 
