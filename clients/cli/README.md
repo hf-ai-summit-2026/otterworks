@@ -46,6 +46,9 @@ otter info /Finance --json
 otter cat /Finance/Reports/q1.xlsx
 otter versions /Finance/Reports/q1.xlsx
 otter versions /Finance/Reports/q1.xlsx --json
+otter sync ./local-drive /Finance --dry-run
+otter sync ./local-drive /Finance
+otter sync ./local-drive /Finance --replace --json
 
 otter upload ./report.pdf --to /Finance/Reports
 otter upload ./quarterly-folder -r --to /Finance
@@ -57,6 +60,26 @@ otter trash --json
 otter restore report.pdf
 otter search Q2
 otter search budget --type document --json
+```
+
+`sync` walks a local directory and copies its contents into an existing remote folder,
+creating matching subfolders as needed. It skips files with a same-name, same-size remote
+file; size is the only comparison because the API does not expose checksums. Changed files
+are skipped unless `--replace` is set. Replacement uploads a new file before moving the old
+one to Trash, so the replacement receives a new ID and existing shares are not carried over.
+Ambiguous remote names are skipped, and remote-only files are never deleted. Dotfiles and
+symlinks are skipped. Use `--dry-run` to plan folder and file actions without mutating the
+drive.
+
+Enable shell completion with:
+
+```sh
+# Bash
+eval "$(otter completion bash)"
+
+# Zsh: save the generated script as _otter in a directory on fpath, then run compinit.
+mkdir -p ~/.zsh/completions
+otter completion zsh > ~/.zsh/completions/_otter
 ```
 
 Paths use `/` for the drive root, exact folder and file names, or a raw UUID. Ambiguous

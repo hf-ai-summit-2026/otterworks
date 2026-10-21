@@ -5,6 +5,7 @@ import getpass
 import json
 import mimetypes
 import os
+import shlex
 import sys
 import uuid
 from datetime import datetime
@@ -578,6 +579,217 @@ def _upload(args: argparse.Namespace, client: OtterClient) -> int:
     return 0
 
 
+def _sync_local_tree(local_root: Path) -> tuple[list[Path], list[Path]]:
+    directories: list[Path] = []
+    files: list[Path] = []
+
+    def raise_walk_error(error: OSError) -> None:
+        raise error
+
+    for current, dirnames, filenames in os.walk(
+        local_root, topdown=True, onerror=raise_walk_error, followlinks=False
+    ):
+        current_path = Path(current)
+        relative = current_path.relative_to(local_root)
+        if relative != Path("."):
+            directories.append(relative)
+        dirnames[:] = sorted(
+            name
+            for name in dirnames
+            if not name.startswith(".") and not (current_path / name).is_symlink()
+        )
+        for name in sorted(filenames):
+            path = current_path / name
+            if name.startswith(".") or path.is_symlink() or not path.is_file():
+                continue
+            files.append(path)
+
+    directories.sort(key=lambda path: (len(path.parts), path.as_posix()))
+    files.sort(key=lambda path: path.relative_to(local_root).as_posix())
+    return directories, files
+
+
+def _sync_remote_path(root_path: str, relative: Path) -> str:
+    suffix = relative.as_posix()
+    if not suffix or suffix == ".":
+        return root_path
+    return f"{root_path.rstrip('/')}/{suffix}" if root_path != "/" else f"/{suffix}"
+
+
+def _sync(args: argparse.Namespace, client: OtterClient) -> int:
+    local_root = Path(args.local_dir).expanduser()
+    if local_root.is_symlink() or not local_root.is_dir():
+        raise ValueError(f"Local path is not a directory: {local_root}")
+
+    folders = client.list_folder_tree()
+    try:
+        root_id = resolve_folder(args.remote_path, folders)
+    except AmbiguousPathError:
+        raise
+    except PathResolutionError as error:
+        raise ValueError(
+            f"Remote path not found: {args.remote_path}; "
+            f"create it with `otter mkdir -p {args.remote_path}`"
+        ) from error
+    root_path = folder_path(root_id, folders)
+    files = client.list_all_files()
+    try:
+        directories, local_files = _sync_local_tree(local_root)
+    except OSError as error:
+        raise ValueError(f"Unable to read local directory: {error}") from error
+
+    actions: list[dict[str, Any]] = []
+    summary = {
+        "mkdir": 0,
+        "upload": 0,
+        "replace": 0,
+        "skip": 0,
+        "changed": 0,
+        "ambiguous": 0,
+        "failed": 0,
+    }
+
+    def add_action(
+        action: str,
+        path: str,
+        status: str,
+        detail: str | None = None,
+    ) -> None:
+        record: dict[str, Any] = {"action": action, "path": path, "status": status}
+        if detail:
+            record["detail"] = detail
+        actions.append(record)
+        summary[action] += 1
+        if status == "failed":
+            summary["failed"] += 1
+
+    folder_ids: dict[Path, tuple[str | None, bool]] = {Path("."): (root_id, True)}
+    owner_id: str | None = None
+    for relative in directories:
+        parent_relative = relative.parent
+        parent_id, parent_exists = folder_ids.get(parent_relative, (None, False))
+        path = _sync_remote_path(root_path, relative)
+        if not parent_exists:
+            if args.dry_run:
+                add_action("mkdir", path, "planned")
+            else:
+                add_action("mkdir", path, "failed", "parent folder was not created")
+            folder_ids[relative] = (None, False)
+            continue
+
+        name = relative.name
+        matches = _matching_folders(name, parent_id, folders)
+        if len(matches) > 1:
+            add_action(
+                "mkdir",
+                path,
+                "failed",
+                "ambiguous remote folder name",
+            )
+            folder_ids[relative] = (None, False)
+            continue
+        if matches:
+            folder_ids[relative] = (str(matches[0]["id"]), True)
+            continue
+        if args.dry_run:
+            add_action("mkdir", path, "planned")
+            folder_ids[relative] = (None, False)
+            continue
+
+        try:
+            if owner_id is None:
+                owner_id = _owner_id(client)
+            created_id = _find_or_create_folder(
+                client, folders, name, parent_id, owner_id
+            )
+        except (ApiError, httpx.HTTPError, OSError, ValueError) as error:
+            add_action("mkdir", path, "failed", str(error))
+            folder_ids[relative] = (None, False)
+            continue
+        folder_ids[relative] = (created_id, True)
+        add_action("mkdir", path, "created")
+
+    warning_emitted = False
+    for local_file in local_files:
+        relative = local_file.relative_to(local_root)
+        relative_parent = relative.parent
+        folder_id, folder_exists = folder_ids.get(relative_parent, (root_id, True))
+        remote_path = _sync_remote_path(root_path, relative)
+        try:
+            local_size = local_file.stat().st_size
+        except OSError as error:
+            add_action("upload", remote_path, "failed", str(error))
+            continue
+        if not folder_exists:
+            if args.dry_run:
+                add_action("upload", remote_path, "planned")
+            else:
+                add_action("upload", remote_path, "failed", "parent folder was not created")
+            continue
+        matches = _matching_files(local_file.name, folder_id, files)
+        if len(matches) > 1:
+            add_action(
+                "ambiguous",
+                remote_path,
+                "skipped",
+                f"{len(matches)} remote files with this name",
+            )
+            continue
+        if matches and _size(matches[0]) == local_size:
+            add_action("skip", remote_path, "same")
+            continue
+        if matches and not args.replace:
+            add_action("changed", remote_path, "skipped", "skipped; use --replace")
+            continue
+
+        is_replace = bool(matches)
+        action = "replace" if is_replace else "upload"
+        if args.dry_run:
+            add_action(action, remote_path, "planned")
+            continue
+        try:
+            _upload_file(client, local_file, folder_id, folders)
+        except (ApiError, httpx.HTTPError, OSError, ValueError) as error:
+            detail = f"upload failed: {error}" if is_replace else str(error)
+            add_action(action, remote_path, "failed", detail)
+            continue
+        if is_replace:
+            try:
+                client.post(f"/files/{matches[0]['id']}/trash")
+            except (ApiError, httpx.HTTPError, OSError, ValueError) as error:
+                add_action("replace", remote_path, "failed", f"trash failed: {error}")
+                continue
+            matches[0]["isTrashed"] = True
+            if not warning_emitted:
+                warning_emitted = True
+            add_action("replace", remote_path, "replaced")
+        else:
+            add_action("upload", remote_path, "uploaded")
+
+    if warning_emitted:
+        print(
+            "Warning: replacements get new file IDs; existing shares are not carried over.",
+            file=sys.stderr,
+        )
+    if args.json:
+        _json({"actions": actions, "summary": summary})
+        return int(summary["failed"] > 0)
+
+    for action in actions:
+        detail = action.get("detail")
+        if not detail and action["status"] == "planned":
+            detail = "planned"
+        elif not detail and action["action"] == "skip":
+            detail = "same"
+        suffix = f" ({detail})" if detail else ""
+        print(f"{action['action']} {action['path']}{suffix}")
+    print(
+        "Summary: "
+        + ", ".join(f"{name}={count}" for name, count in summary.items())
+    )
+    return int(summary["failed"] > 0)
+
+
 def _download(args: argparse.Namespace, client: OtterClient) -> int:
     folders = client.list_folder_tree()
     files = client.list_all_files()
@@ -967,6 +1179,113 @@ def _versions(args: argparse.Namespace, client: OtterClient) -> int:
     return 0
 
 
+def _parser_option_strings(parser: argparse.ArgumentParser) -> list[str]:
+    return sorted(
+        {
+            option
+            for action in parser._actions
+            for option in action.option_strings
+        }
+    )
+
+
+def _subcommand_parsers(
+    parser: argparse.ArgumentParser,
+) -> dict[str, argparse.ArgumentParser]:
+    action = next(
+        action
+        for action in parser._actions
+        if isinstance(action, argparse._SubParsersAction)
+    )
+    return action.choices
+
+
+def _bash_completion(parser: argparse.ArgumentParser) -> str:
+    subcommands = _subcommand_parsers(parser)
+    root_words = " ".join(
+        [*subcommands, *_parser_option_strings(parser)]
+    )
+    lines = [
+        "_otter_completion() {",
+        "    local current command",
+        '    current="${COMP_WORDS[COMP_CWORD]}"',
+        "    if (( COMP_CWORD == 1 )); then",
+        (
+            "        COMPREPLY=( $(compgen -W "
+            f"{shlex.quote(root_words)} -- \"$current\") )"
+        ),
+        "        return 0",
+        "    fi",
+        '    command="${COMP_WORDS[1]}"',
+        '    case "$command" in',
+    ]
+    for name, command_parser in subcommands.items():
+        options = " ".join(_parser_option_strings(command_parser))
+        lines.extend(
+            [
+                f"        {name})",
+                (
+                    "            COMPREPLY=( $(compgen -W "
+                    f"{shlex.quote(options)} -- \"$current\") )"
+                ),
+                "            ;;",
+            ]
+        )
+    lines.extend(
+        [
+            "    esac",
+            "}",
+            "complete -F _otter_completion otter",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _zsh_completion(parser: argparse.ArgumentParser) -> str:
+    subcommands = _subcommand_parsers(parser)
+    command_words = " ".join(subcommands)
+    root_options = " ".join(
+        shlex.quote(option) for option in _parser_option_strings(parser)
+    )
+    lines = [
+        "#compdef otter",
+        "_otter_completion() {",
+        "    local -a commands",
+        f"    commands=({command_words})",
+        "    if (( CURRENT == 2 )); then",
+        f'        compadd -- "${{commands[@]}}" {root_options}',
+        "        return",
+        "    fi",
+        '    case "${words[2]}" in',
+    ]
+    for name, command_parser in subcommands.items():
+        options = " ".join(
+            shlex.quote(option) for option in _parser_option_strings(command_parser)
+        )
+        lines.extend(
+            [
+                f"        {name})",
+                f"            compadd -- {options}",
+                "            ;;",
+            ]
+        )
+    lines.extend(
+        [
+            "    esac",
+            "}",
+            "compdef _otter_completion otter",
+        ]
+    )
+    return "\n".join(lines) + "\n"
+
+
+def _completion(args: argparse.Namespace, client: OtterClient | None = None) -> int:
+    parser = build_parser()
+    script = _bash_completion(parser) if args.shell == "bash" else _zsh_completion(parser)
+    print(script, end="")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="otter")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1082,6 +1401,18 @@ def build_parser() -> argparse.ArgumentParser:
     versions.add_argument("path")
     versions.add_argument("--json", action="store_true")
     versions.set_defaults(handler=_versions)
+
+    sync = commands.add_parser("sync")
+    sync.add_argument("local_dir")
+    sync.add_argument("remote_path")
+    sync.add_argument("--dry-run", action="store_true")
+    sync.add_argument("--replace", action="store_true")
+    sync.add_argument("--json", action="store_true")
+    sync.set_defaults(handler=_sync)
+
+    completion = commands.add_parser("completion")
+    completion.add_argument("shell", choices=("bash", "zsh"))
+    completion.set_defaults(handler=_completion)
     return parser
 
 
@@ -1102,6 +1433,8 @@ def main(argv: list[str] | None = None) -> int:
             parser.error(str(error))
     if args.command == "rename" and (not args.new_name or "/" in args.new_name):
         parser.error("NEW_NAME must be non-empty and must not contain '/'")
+    if args.command == "completion":
+        return args.handler(args)
     client: OtterClient | None = None
     try:
         client = OtterClient(api_url=getattr(args, "api_url", None))
