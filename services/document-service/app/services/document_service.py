@@ -7,7 +7,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, load_only
 
 from app.models.document import Comment, Document, DocumentVersion, Template
 from app.schemas.document import (
@@ -126,6 +126,14 @@ class DocumentService:
                 select(ranked_version)
                 .where(ranked.c.rank <= 5)
                 .order_by(ranked.c.document_id, ranked.c.version_number.desc())
+                # Rows are already in the session via the selectin `versions` load.
+                .options(
+                    load_only(
+                        ranked_version.id,
+                        ranked_version.document_id,
+                        ranked_version.version_number,
+                    )
+                )
             )
             for version in ver_result.scalars().all():
                 recent[version.document_id].append(version)
