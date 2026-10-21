@@ -124,11 +124,15 @@ def advanced_search() -> tuple:
     owner_id is always derived from X-User-ID for tenant isolation.
     """
     data = request.get_json() or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
 
     query = data.get("q")
     doc_type = data.get("type")
     owner_id = request.headers.get("X-User-ID", "").strip() or None
     tags = data.get("tags")
+    if tags is not None and not (isinstance(tags, list) and all(isinstance(t, str) for t in tags)):
+        return jsonify({"error": "'tags' must be a list of strings"}), 400
     date_from = data.get("date_from")
     date_to = data.get("date_to")
     try:
