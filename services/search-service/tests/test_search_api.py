@@ -146,6 +146,14 @@ class TestAdvancedSearchEndpoint:
         response = client.post("/api/v1/search/advanced", json={})
         assert response.status_code == 200
 
+    def test_advanced_search_non_object_body(self, client, mock_meilisearch_client):
+        """Advanced search with a JSON array/scalar body returns 400, not 500."""
+        for body in ([1, 2], "report", 42):
+            response = client.post("/api/v1/search/advanced", json=body)
+            assert response.status_code == 400
+            assert "error" in response.get_json()
+        mock_meilisearch_client.index.return_value.search.assert_not_called()
+
 
 class TestAnalyticsEndpoint:
     """Tests for GET /api/v1/search/analytics."""
