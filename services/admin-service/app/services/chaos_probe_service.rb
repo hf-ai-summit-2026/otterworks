@@ -13,7 +13,7 @@ class ChaosProbeService
   SERVICE_PROBES = {
     'search-service' => {
       url: 'http://search-service:8087/api/v1/search/suggest?q=test',
-      headers: { 'X-User-ID' => 'chaos-probe' },
+      headers: { 'X-User-ID' => 'chaos-probe' }
     },
     # file-service upload expects multipart/form-data with a "file" field.
     # Sending JSON results in a 400 before the chaos flag is ever checked.
@@ -21,7 +21,7 @@ class ChaosProbeService
     'file-service' => {
       url: 'http://file-service:8082/api/v1/files/upload',
       method: :multipart,
-      headers: { 'X-User-ID' => '00000000-0000-0000-0000-000000000001' },
+      headers: { 'X-User-ID' => '00000000-0000-0000-0000-000000000001' }
     },
     # notification-service chaos works by switching to a strict JSON parser
     # that rejects messages with integer (Unix epoch) timestamps.  Hitting
@@ -30,7 +30,7 @@ class ChaosProbeService
     'notification-service' => {
       url: 'http://localstack:4566/000000000000/otterworks-notifications',
       method: :sqs,
-      headers: {},
+      headers: {}
     },
     # document-service chaos injects 3-5s latency before every DB query.
     # The probe hits GET /api/v1/documents so the slow response times show
@@ -38,8 +38,8 @@ class ChaosProbeService
     'document-service' => {
       url: 'http://document-service:8083/api/v1/documents/',
       headers: { 'X-User-ID' => '00000000-0000-0000-0000-000000000001' },
-      read_timeout: 8,
-    },
+      read_timeout: 8
+    }
   }.freeze
 
   # Starts a background probe thread for the given service.
@@ -52,7 +52,8 @@ class ChaosProbeService
       Thread.current.report_on_exception = true
       Rails.logger.info("[ChaosProbe] Started for #{service}")
       redis = Redis.new(
-        url: ENV.fetch('REDIS_URL', "redis://#{ENV.fetch('REDIS_HOST', 'localhost')}:#{ENV.fetch('REDIS_PORT', '6379')}/0"),
+        url: ENV.fetch('REDIS_URL',
+                       "redis://#{ENV.fetch('REDIS_HOST', 'localhost')}:#{ENV.fetch('REDIS_PORT', '6379')}/0"),
         timeout: 2
       )
 
@@ -124,13 +125,13 @@ class ChaosProbeService
       fileId: SecureRandom.uuid,
       ownerId: SecureRandom.uuid,
       sharedWithUserId: SecureRandom.uuid,
-      timestamp: Time.now.to_i, # integer epoch — strict parser rejects this
+      timestamp: Time.now.to_i # integer epoch — strict parser rejects this
     }.to_json
 
     body = URI.encode_www_form(
-      'Action'          => 'SendMessage',
-      'MessageBody'     => malformed_message,
-      'Version'         => '2012-11-05',
+      'Action' => 'SendMessage',
+      'MessageBody' => malformed_message,
+      'Version' => '2012-11-05'
     )
 
     req = Net::HTTP::Post.new(uri.request_uri)
