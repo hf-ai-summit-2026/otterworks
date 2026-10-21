@@ -124,6 +124,8 @@ def advanced_search() -> tuple:
     owner_id is always derived from X-User-ID for tenant isolation.
     """
     data = request.get_json() or {}
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
 
     query = data.get("q")
     doc_type = data.get("type")
