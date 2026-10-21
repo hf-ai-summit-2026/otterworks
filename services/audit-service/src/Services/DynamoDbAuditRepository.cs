@@ -156,7 +156,9 @@ public class DynamoDbAuditRepository : IAuditRepository
 
         allEvents = allEvents.OrderByDescending(e => e.Timestamp).ToList();
         var total = allEvents.Count;
-        var paged = allEvents.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        page = Math.Max(page, 1);
+        var offset = (int)Math.Min((long)(page - 1) * pageSize, int.MaxValue);
+        var paged = allEvents.Skip(offset).Take(pageSize).ToList();
 
         _logger.LogDebug("Queried audit events: userId={UserId}, action={Action}, total={Total}", userId, action, total);
         return new AuditEventPage

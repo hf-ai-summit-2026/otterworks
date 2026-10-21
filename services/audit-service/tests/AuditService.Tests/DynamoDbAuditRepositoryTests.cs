@@ -143,6 +143,48 @@ public class DynamoDbAuditRepositoryTests
         Assert.Equal(2, result.PageSize);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task QueryEventsAsync_WithNonPositivePage_ShouldReturnFirstPage(int page)
+    {
+        SetupScanItems(
+            CreateDynamoDbItem("e1", "user-1", "create", "document", "doc-1"),
+            CreateDynamoDbItem("e2", "user-1", "update", "document", "doc-2"),
+            CreateDynamoDbItem("e3", "user-1", "delete", "document", "doc-3"));
+
+        var result = await _repository.QueryEventsAsync(null, null, null, null, null, null, page, 2);
+
+        Assert.Equal(1, result.Page);
+        Assert.Equal(2, result.Events.Count);
+        Assert.Equal(3, result.Total);
+    }
+
+    [Fact]
+    public async Task QueryEventsAsync_WithPageBeyondIntRange_ShouldReturnEmptyPage()
+    {
+        SetupScanItems(
+            CreateDynamoDbItem("e1", "user-1", "create", "document", "doc-1"),
+            CreateDynamoDbItem("e2", "user-1", "update", "document", "doc-2"));
+
+        var result = await _repository.QueryEventsAsync(null, null, null, null, null, null, int.MaxValue, 100);
+
+        Assert.Empty(result.Events);
+        Assert.Equal(int.MaxValue, result.Page);
+        Assert.Equal(2, result.Total);
+    }
+
+    private void SetupScanItems(params Dictionary<string, AttributeValue>[] items)
+    {
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .ReturnsAsync(new ScanResponse
+            {
+                Items = items.ToList(),
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            });
+    }
+
     [Fact]
     public async Task QueryEventsAsync_WithFilters_ShouldApplyFilterExpression()
     {
