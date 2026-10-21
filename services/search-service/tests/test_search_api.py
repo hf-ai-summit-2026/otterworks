@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 class TestSearchEndpoint:
     """Tests for GET /api/v1/search/."""
@@ -145,6 +147,23 @@ class TestAdvancedSearchEndpoint:
 
         response = client.post("/api/v1/search/advanced", json={})
         assert response.status_code == 200
+
+    @pytest.mark.parametrize(
+        "body",
+        [
+            {"tags": "finance"},
+            {"tags": 123},
+            {"tags": ["finance", 1]},
+            {"date_from": 20240101},
+            {"date_to": ["2024-12-31"]},
+        ],
+    )
+    def test_advanced_search_rejects_invalid_filter_types(self, client, mock_meilisearch_client, body):
+        """Wrongly-typed filters return 400 instead of a 500 or a mangled filter."""
+        response = client.post("/api/v1/search/advanced", json=body)
+        assert response.status_code == 400
+        assert "error" in response.get_json()
+        mock_meilisearch_client.index.return_value.search.assert_not_called()
 
 
 class TestAnalyticsEndpoint:
