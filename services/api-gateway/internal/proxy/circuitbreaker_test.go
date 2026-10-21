@@ -59,7 +59,7 @@ func TestCircuitBreaker_TripsOnFailures(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
-		cb.Execute(failHandler, rec, req)
+		_ = cb.Execute(failHandler, rec, req)
 	}
 
 	assert.Equal(t, StateOpen, cb.State())
@@ -92,7 +92,7 @@ func TestCircuitBreaker_TransitionsToHalfOpen(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
-		cb.Execute(failHandler, rec, req)
+		_ = cb.Execute(failHandler, rec, req)
 	}
 	assert.Equal(t, StateOpen, cb.State())
 
@@ -124,7 +124,7 @@ func TestCircuitBreaker_RecoveryFromHalfOpen(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		rec := httptest.NewRecorder()
-		cb.Execute(failHandler, rec, req)
+		_ = cb.Execute(failHandler, rec, req)
 	}
 	assert.Equal(t, StateOpen, cb.State())
 

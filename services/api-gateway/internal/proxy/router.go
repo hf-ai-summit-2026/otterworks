@@ -42,7 +42,7 @@ func NewRouter(cfg RouterConfig) chi.Router {
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error": "route not found",
 		})
 	})
@@ -88,7 +88,7 @@ func newProxyHandler(route Route, cfg RouterConfig) http.HandlerFunc {
 
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error":  "service unavailable",
 			"target": route.Prefix,
 		})
@@ -110,7 +110,7 @@ func newProxyHandler(route Route, cfg RouterConfig) http.HandlerFunc {
 
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{
+			_ = json.NewEncoder(w).Encode(map[string]string{
 				"error":   "service temporarily unavailable",
 				"service": route.Prefix,
 				"reason":  "circuit breaker open",
