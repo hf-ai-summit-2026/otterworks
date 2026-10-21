@@ -65,7 +65,7 @@ RSpec.describe Api::V1::Admin::UsersController do
 
     it 'returns errors for invalid params' do
       put :update, params: { id: user.id, user: { role: 'invalid_role' } }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
   end
 
