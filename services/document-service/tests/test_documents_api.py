@@ -279,3 +279,63 @@ async def test_create_document_no_auth_returns_401(client: AsyncClient):
         json={"title": "No Auth Doc"},
     )
     assert resp.status_code == 401
+
+
+async def _seed_documents_with_versions(
+    db_session, owner_id: uuid.UUID, documents: int, versions: int
+) -> None:
+    from app.models.document import Document, DocumentVersion
+
+    for i in range(documents):
+        doc = Document(
+            title=f"Doc {i}", content="body", owner_id=owner_id, version=versions
+        )
+        db_session.add(doc)
+        await db_session.flush()
+        for n in range(1, versions + 1):
+            db_session.add(
+                DocumentVersion(
+                    document_id=doc.id,
+                    version_number=n,
+                    title=f"Doc {i} v{n}",
+                    content="body",
+                    created_by=owner_id,
+                )
+            )
+    await db_session.commit()
+
+
+@pytest.mark.asyncio
+async def test_list_documents_statement_count_is_constant(
+    client: AsyncClient, db_session, owner_id: uuid.UUID
+):
+    from sqlalchemy import event
+
+    from tests.conftest import engine
+
+    await _seed_documents_with_versions(db_session, owner_id, documents=100, versions=7)
+
+    statements: list[str] = []
+
+    def _count(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        statements.append(statement)
+
+    async def _list_statements(size: int) -> int:
+        db_session.expunge_all()
+        statements.clear()
+        event.listen(engine.sync_engine, "before_cursor_execute", _count)
+        try:
+            resp = await client.get(
+                "/api/v1/documents/", params={"owner_id": str(owner_id), "size": size}
+            )
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", _count)
+        assert resp.status_code == 200
+        assert len(resp.json()["items"]) == size
+        assert int(resp.headers["X-DB-Queries"]) == len(statements)
+        return len(statements)
+
+    small = await _list_statements(10)
+    large = await _list_statements(100)
+    assert small == large
+    assert large <= 5
