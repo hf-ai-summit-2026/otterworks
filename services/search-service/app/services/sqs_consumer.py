@@ -14,6 +14,37 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+# Domain event type -> indexer action. Shared by every inbound event shape.
+EVENT_ACTIONS: dict[str, str] = {
+    "document_created": "index_document",
+    "document_updated": "index_document",
+    "document_deleted": "delete",
+    "file_created": "index_file",
+    "file_uploaded": "index_file",
+    "file_updated": "index_file",
+    "file_restored": "index_file",
+    "file_deleted": "delete",
+    "file_trashed": "delete",
+}
+
+
+def _file_event_to_index_data(body: dict[str, Any]) -> dict[str, Any]:
+    """Map a camelCase file event to the snake_case fields the indexer expects.
+
+    file-service emits ``name``; the shared schema names the field ``fileName``.
+    """
+    return {
+        "id": body.get("fileId", ""),
+        "name": body.get("name") or body.get("fileName", ""),
+        "mime_type": body.get("mimeType", ""),
+        "owner_id": body.get("ownerId", ""),
+        "folder_id": body.get("folderId", ""),
+        "size": body.get("sizeBytes", 0),
+        "tags": body.get("tags", []),
+        "created_at": body.get("timestamp"),
+        "updated_at": body.get("timestamp"),
+    }
+
 
 class SQSConsumer:
     """Background thread SQS consumer for search-indexing queue events."""
@@ -93,70 +124,26 @@ class SQSConsumer:
         """Normalize event payloads from different services into the indexer format.
 
         Handles:
-        - snake_case events with nested payload (document-service format)
-        - camelCase flat events from file-service (eventType, fileId, etc.)
+        - snake_case ``event_type`` + nested ``payload`` (document-service)
+        - camelCase flat ``eventType`` events (file-service; see
+          ``shared/events/schemas/file-events.json``)
+        - events already in indexer format (``action`` + ``data``), returned as-is
         """
-        # Format 1: snake_case with nested payload (document-service)
         if "event_type" in body and "payload" in body:
-            action_map = {
-                "document_created": "index_document",
-                "document_updated": "index_document",
-                "document_deleted": "delete",
-                "file_created": "index_file",
-                "file_uploaded": "index_file",
-                "file_updated": "index_file",
-                "file_deleted": "delete",
-                "file_trashed": "delete",
-                "file_restored": "index_file",
-            }
-            return {
-                "action": action_map.get(body["event_type"], body["event_type"]),
-                "data": body["payload"],
-            }
+            action = EVENT_ACTIONS.get(body["event_type"], body["event_type"])
+            return {"action": action, "data": body["payload"]}
 
-        # Format 2: camelCase flat event from file-service
         if "eventType" in body:
-            event_type = body["eventType"]
-            action_map = {
-                "file_uploaded": "index_file",
-                "file_created": "index_file",
-                "file_updated": "index_file",
-                "file_deleted": "delete",
-                "file_trashed": "delete",
-                "file_restored": "index_file",
-            }
-            # file_shared and file_moved events don't carry file metadata
-            # (name, mimeType, sizeBytes) so they can't be indexed — skip them
-            action = action_map.get(event_type)
-            if not action:
+            action = EVENT_ACTIONS.get(body["eventType"])
+            # Events without file metadata (file_shared, file_moved, document
+            # events on this shape) can't be indexed; pass them through so the
+            # indexer logs them as unknown and they are acked.
+            if action is None or action == "index_document":
                 return body
-
             if action == "delete":
-                return {
-                    "action": "delete",
-                    "data": {
-                        "type": "file",
-                        "id": body.get("fileId", ""),
-                    },
-                }
+                return {"action": "delete", "data": {"type": "file", "id": body.get("fileId", "")}}
+            return {"action": action, "data": _file_event_to_index_data(body)}
 
-            # Map camelCase fields to snake_case for the indexer
-            return {
-                "action": action,
-                "data": {
-                    "id": body.get("fileId", ""),
-                    "name": body.get("name", ""),
-                    "mime_type": body.get("mimeType", ""),
-                    "owner_id": body.get("ownerId", ""),
-                    "folder_id": body.get("folderId", ""),
-                    "size": body.get("sizeBytes", 0),
-                    "tags": body.get("tags", []),
-                    "created_at": body.get("timestamp"),
-                    "updated_at": body.get("timestamp"),
-                },
-            }
-
-        # Format 3: already in indexer format (action + data)
         return body
 
     def _process_message(self, sqs: Any, message: dict[str, Any]) -> None:
