@@ -56,6 +56,21 @@ async def test_list_documents_with_filters(
 
 
 @pytest.mark.asyncio
+async def test_list_documents_attaches_newest_five_versions_per_document(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+    busy = await service.create(DocumentCreate(title="busy", content="0", owner_id=owner_id))
+    await service.create(DocumentCreate(title="quiet", content="0", owner_id=owner_id))
+    for i in range(1, 7):
+        await service.patch(busy.id, DocumentPatch(content=str(i)))
+
+    items, _ = await service.list_documents(owner_id=owner_id)
+    recent = {doc.title: [v.version_number for v in doc.recent_versions] for doc in items}
+    assert recent == {"busy": [7, 6, 5, 4, 3], "quiet": [1]}
+
+
+@pytest.mark.asyncio
 async def test_update_creates_version(db_session: AsyncSession, owner_id: uuid.UUID):
     service = DocumentService(db_session)
     doc = await service.create(
