@@ -16,14 +16,16 @@
     <PackageReference Include="Serilog.AspNetCore" Version="8.0.1" />
     <PackageReference Include="Serilog.Sinks.Console" Version="5.0.1" />
     <PackageReference Include="Serilog.Formatting.Compact" Version="2.0.0" />
-    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.7.0" />
-    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.7.0" />
-    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.7.1" />
+    <PackageReference Include="OpenTelemetry.Exporter.OpenTelemetryProtocol" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Extensions.Hosting" Version="1.15.3" />
+    <PackageReference Include="OpenTelemetry.Instrumentation.AspNetCore" Version="1.15.2" />
     <PackageReference Include="prometheus-net.AspNetCore" Version="8.2.1" />
     <!-- Archive read path (legacy data migration): Db2 source, PostgreSQL target (Azure SQL optional) -->
     <PackageReference Include="Net.IBM.Data.Db2-lnx" Version="8.0.0.400" />
     <PackageReference Include="Npgsql" Version="8.0.5" />
     <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.2" />
+    <!-- Pins the transitive System.Text.Json (via Microsoft.Data.SqlClient -> Azure.Identity) past CVE-2024-30105 / CVE-2024-43485 -->
+    <PackageReference Include="System.Text.Json" Version="8.0.6" />
   </ItemGroup>
 
 </Project>

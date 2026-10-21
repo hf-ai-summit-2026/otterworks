@@ -166,6 +166,120 @@ public class DynamoDbAuditRepositoryTests
     }
 
     [Fact]
+    public async Task QueryEventsAsync_ShouldFollowLastEvaluatedKeyAcrossPages()
+    {
+        var continuationKey = new Dictionary<string, AttributeValue> { ["id"] = new AttributeValue { S = "e2" } };
+        var requests = new List<Dictionary<string, AttributeValue>?>();
+
+        var responses = new Queue<ScanResponse>(new[]
+        {
+            new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>>
+                {
+                    CreateDynamoDbItem("e1", "user-1", "create", "document", "doc-1"),
+                    CreateDynamoDbItem("e2", "user-1", "update", "document", "doc-1"),
+                },
+                LastEvaluatedKey = continuationKey,
+            },
+            new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>>
+                {
+                    CreateDynamoDbItem("e3", "user-1", "delete", "document", "doc-1"),
+                },
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            },
+        });
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .Callback<ScanRequest, CancellationToken>((req, _) => requests.Add(req.ExclusiveStartKey is null ? null : new Dictionary<string, AttributeValue>(req.ExclusiveStartKey)))
+            .Returns(() => Task.FromResult(responses.Dequeue()));
+
+        var result = await _repository.QueryEventsAsync(null, null, null, null, null, null, 1, 20);
+
+        Assert.Equal(3, result.Total);
+        Assert.Equal(new[] { "e1", "e2", "e3" }, result.Events.Select(e => e.Id).OrderBy(id => id));
+        Assert.Equal(2, requests.Count);
+        Assert.True(requests[0] is null || requests[0]!.Count == 0);
+        Assert.Equal("e2", requests[1]!["id"].S);
+    }
+
+    [Fact]
+    public async Task QueryEventsAsync_WithFromAndTo_ShouldShareTimestampAttributeName()
+    {
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .ReturnsAsync(new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>>(),
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            });
+
+        var from = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc);
+        var to = new DateTime(2026, 1, 31, 0, 0, 0, DateTimeKind.Utc);
+        await _repository.QueryEventsAsync(null, null, null, null, from, to, 1, 20);
+
+        _mockDynamoDb.Verify(d => d.ScanAsync(It.Is<ScanRequest>(req =>
+            req.FilterExpression == "#ts >= :fromTs AND #ts <= :toTs" &&
+            req.ExpressionAttributeNames.Count == 1 &&
+            req.ExpressionAttributeNames["#ts"] == "Timestamp" &&
+            req.ExpressionAttributeValues[":fromTs"].S == from.ToString("O") &&
+            req.ExpressionAttributeValues[":toTs"].S == to.ToString("O")),
+            default), Times.Once);
+    }
+
+    [Fact]
+    public async Task QueryEventsAsync_WithOnlyTo_ShouldDeclareTimestampAttributeName()
+    {
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .ReturnsAsync(new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>>(),
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            });
+
+        await _repository.QueryEventsAsync(null, null, null, null, null, DateTime.UtcNow, 1, 20);
+
+        _mockDynamoDb.Verify(d => d.ScanAsync(It.Is<ScanRequest>(req =>
+            req.FilterExpression == "#ts <= :toTs" &&
+            req.ExpressionAttributeNames["#ts"] == "Timestamp"),
+            default), Times.Once);
+    }
+
+    [Fact]
+    public async Task GetResourceHistoryAsync_ShouldReturnAllPagesNewestFirst()
+    {
+        var older = CreateDynamoDbItem("old", "user-1", "create", "document", "doc-1");
+        older["Timestamp"] = new AttributeValue { S = new DateTime(2026, 1, 1, 0, 0, 0, DateTimeKind.Utc).ToString("O") };
+        var newer = CreateDynamoDbItem("new", "user-2", "update", "document", "doc-1");
+        newer["Timestamp"] = new AttributeValue { S = new DateTime(2026, 2, 1, 0, 0, 0, DateTimeKind.Utc).ToString("O") };
+
+        var responses = new Queue<ScanResponse>(new[]
+        {
+            new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>> { older },
+                LastEvaluatedKey = new Dictionary<string, AttributeValue> { ["id"] = new AttributeValue { S = "old" } },
+            },
+            new ScanResponse
+            {
+                Items = new List<Dictionary<string, AttributeValue>> { newer },
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            },
+        });
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .Returns(() => Task.FromResult(responses.Dequeue()));
+
+        var result = await _repository.GetResourceHistoryAsync("doc-1");
+
+        Assert.Equal(new[] { "new", "old" }, result.Select(e => e.Id));
+        _mockDynamoDb.Verify(d => d.ScanAsync(It.IsAny<ScanRequest>(), default), Times.Exactly(2));
+    }
+
+    [Fact]
     public async Task GetAllUserEventsAsync_ShouldFilterByUserId()
     {
         var items = new List<Dictionary<string, AttributeValue>>

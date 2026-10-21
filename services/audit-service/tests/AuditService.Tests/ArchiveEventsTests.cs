@@ -129,7 +129,11 @@ public class ArchiveControllerTests
 
     private static ArchiveStoreOptions Db2Options() => new()
     {
-        Store = "db2", Db2Host = "h", Db2Database = "d", Db2User = "u", Db2Password = "p",
+        Store = "db2",
+        Db2Host = "h",
+        Db2Database = "d",
+        Db2User = "u",
+        Db2Password = "p",
     };
 
     [Fact]

@@ -136,7 +136,14 @@ app.MapGet("/metrics", async () =>
 app.MapAuditEndpoints();
 app.MapArchiveEndpoints();
 
-app.Run();
+try
+{
+    app.Run();
+}
+finally
+{
+    Log.CloseAndFlush();
+}
 
 // Health check implementation
 public class DynamoDbHealthCheck : Microsoft.Extensions.Diagnostics.HealthChecks.IHealthCheck

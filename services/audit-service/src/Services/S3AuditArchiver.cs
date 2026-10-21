@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Text;
 using System.Text.Json;
 using Amazon.S3;
@@ -10,6 +11,8 @@ namespace OtterWorks.AuditService.Services;
 
 public class S3AuditArchiver : IAuditArchiver
 {
+    private static readonly JsonSerializerOptions IndentedJsonOptions = new() { WriteIndented = true };
+
     private readonly IAmazonS3 _s3Client;
     private readonly IAuditRepository _repository;
     private readonly AwsSettings _settings;
@@ -43,7 +46,7 @@ public class S3AuditArchiver : IAuditArchiver
         }
         else
         {
-            content = JsonSerializer.Serialize(events, new JsonSerializerOptions { WriteIndented = true });
+            content = JsonSerializer.Serialize(events, IndentedJsonOptions);
             contentType = "application/json";
             extension = "json";
         }
@@ -88,7 +91,7 @@ public class S3AuditArchiver : IAuditArchiver
             };
         }
 
-        var content = JsonSerializer.Serialize(events, new JsonSerializerOptions { WriteIndented = true });
+        var content = JsonSerializer.Serialize(events, IndentedJsonOptions);
         var key = $"audit-archive/{olderThan:yyyy-MM-dd}/{Guid.NewGuid():N}.json";
 
         var putRequest = new PutObjectRequest
@@ -134,7 +137,7 @@ public class S3AuditArchiver : IAuditArchiver
 
         foreach (var e in events)
         {
-            sb.AppendLine($"\"{Esc(e.Id)}\",\"{e.Timestamp:O}\",\"{Esc(e.UserId)}\",\"{Esc(e.Action)}\",\"{Esc(e.ResourceType)}\",\"{Esc(e.ResourceId)}\",\"{Esc(e.IpAddress)}\",\"{Esc(e.UserAgent)}\"");
+            sb.AppendLine(CultureInfo.InvariantCulture, $"\"{Esc(e.Id)}\",\"{e.Timestamp:O}\",\"{Esc(e.UserId)}\",\"{Esc(e.Action)}\",\"{Esc(e.ResourceType)}\",\"{Esc(e.ResourceId)}\",\"{Esc(e.IpAddress)}\",\"{Esc(e.UserAgent)}\"");
         }
 
         return sb.ToString();
