@@ -115,10 +115,16 @@ describe('CollaborationManager', () => {
         transports: ['websocket'],
       });
 
-      client.on('connect', () => resolve(client));
-      client.on('connect_error', (err) => reject(err));
+      const timer = setTimeout(() => reject(new Error('Connection timeout')), 5000);
 
-      setTimeout(() => reject(new Error('Connection timeout')), 5000);
+      client.on('connect', () => {
+        clearTimeout(timer);
+        resolve(client);
+      });
+      client.on('connect_error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
     });
   }
 

@@ -67,7 +67,7 @@ module Api
             render json: incident, serializer: IncidentSerializer, status: :created
           else
             render json: { error: 'Validation failed', details: incident.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 
@@ -79,7 +79,7 @@ module Api
             return render json: {
               error: 'Invalid status transition',
               details: "Cannot transition from '#{@incident.status}' to '#{new_status}'"
-            }, status: :unprocessable_entity
+            }, status: :unprocessable_content
           end
 
           previous_status = @incident.status
@@ -104,7 +104,7 @@ module Api
           render json: @incident, serializer: IncidentSerializer
         rescue Incident::InvalidTransitionError => e
           render json: { error: 'Invalid status transition', details: e.message },
-                 status: :unprocessable_entity
+                 status: :unprocessable_content
         end
 
         # DELETE /api/v1/admin/incidents/:id
@@ -134,7 +134,7 @@ module Api
         # POST /api/v1/admin/incidents/:id/trigger_session
         def trigger_session
           if @incident.devin_session_id.present?
-            return render json: { error: 'Incident already has a Devin session' }, status: :unprocessable_entity
+            return render json: { error: 'Incident already has a Devin session' }, status: :unprocessable_content
           end
 
           session_result = DevinSessionService.create_session(incident: @incident)

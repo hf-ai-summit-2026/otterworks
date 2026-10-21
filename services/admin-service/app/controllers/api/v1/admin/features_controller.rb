@@ -41,7 +41,7 @@ module Api
             render json: feature_flag, serializer: FeatureFlagSerializer, status: :created
           else
             render json: { error: 'Validation failed', details: feature_flag.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 
@@ -60,7 +60,7 @@ module Api
             render json: @feature_flag, serializer: FeatureFlagSerializer
           else
             render json: { error: 'Validation failed', details: @feature_flag.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 

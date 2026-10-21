@@ -5,10 +5,10 @@ module Api
         CHAOS_TTL_SECONDS = 600 # 10-minute auto-expiry so demo resets itself
 
         VALID_SCENARIOS = {
-          'search-service'       => 'suggest_500',
-          'file-service'         => 'upload_s3_error',
+          'search-service' => 'suggest_500',
+          'file-service' => 'upload_s3_error',
           'notification-service' => 'consumer_strict_schema',
-          'document-service'     => 'slow_queries',
+          'document-service' => 'slow_queries'
         }.freeze
 
         before_action :verify_chaos_secret
@@ -21,9 +21,9 @@ module Api
 
           unless VALID_SCENARIOS[svc] == scenario
             return render json: {
-              error:    'Invalid service/scenario combination',
-              valid:    VALID_SCENARIOS,
-            }, status: :unprocessable_entity
+              error: 'Invalid service/scenario combination',
+              valid: VALID_SCENARIOS
+            }, status: :unprocessable_content
           end
 
           redis_key = "chaos:#{svc}:#{scenario}"
@@ -35,9 +35,9 @@ module Api
           Rails.logger.warn("CHAOS TRIGGERED: #{redis_key} (TTL #{CHAOS_TTL_SECONDS}s)")
 
           render json: {
-            status:     'chaos_active',
-            key:        redis_key,
-            expires_in: CHAOS_TTL_SECONDS,
+            status: 'chaos_active',
+            key: redis_key,
+            expires_in: CHAOS_TTL_SECONDS
           }
         end
 
@@ -53,12 +53,10 @@ module Api
             Incident.where(affected_service: svc)
                     .where(status: %w[open investigating])
                     .each do |incident|
-              begin
-                incident.resolve!
-                resolved_incidents << incident.id
-              rescue Incident::InvalidTransitionError => e
-                Rails.logger.warn("CHAOS RESET: skipping incident #{incident.id}: #{e.message}")
-              end
+              incident.resolve!
+              resolved_incidents << incident.id
+            rescue Incident::InvalidTransitionError => e
+              Rails.logger.warn("CHAOS RESET: skipping incident #{incident.id}: #{e.message}")
             end
           end
 
@@ -71,7 +69,8 @@ module Api
 
         def redis
           @redis ||= begin
-            url = ENV.fetch('REDIS_URL', "redis://#{ENV.fetch('REDIS_HOST', 'localhost')}:#{ENV.fetch('REDIS_PORT', '6379')}/0")
+            url = ENV.fetch('REDIS_URL',
+                            "redis://#{ENV.fetch('REDIS_HOST', 'localhost')}:#{ENV.fetch('REDIS_PORT', '6379')}/0")
             Redis.new(url: url, timeout: 2)
           end
         end

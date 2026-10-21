@@ -8,10 +8,10 @@ class Incident < ApplicationRecord
   ].freeze
 
   VALID_TRANSITIONS = {
-    'open'          => %w[investigating resolved],
+    'open' => %w[investigating resolved],
     'investigating' => %w[resolved],
-    'resolved'      => %w[closed],
-    'closed'        => %w[]
+    'resolved' => %w[closed],
+    'closed' => %w[]
   }.freeze
 
   validates :title, presence: true, length: { maximum: 255 }

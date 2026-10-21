@@ -22,17 +22,15 @@ module Api
 
         SEVERITY_MAP = {
           'critical' => 'critical',
-          'high'     => 'high',
-          'warning'  => 'medium',
-          'info'     => 'low',
+          'high' => 'high',
+          'warning' => 'medium',
+          'info' => 'low'
         }.freeze
 
         # POST /api/v1/admin/alerts/ingest
         def ingest
           alerts = params[:alerts]
-          unless alerts.is_a?(Array)
-            return render json: { error: 'Missing alerts array' }, status: :bad_request
-          end
+          return render json: { error: 'Missing alerts array' }, status: :bad_request unless alerts.is_a?(Array)
 
           processed = alerts.map { |alert| process_alert(alert) }.compact
 
@@ -71,12 +69,12 @@ module Api
           auto_investigate = AdminSettingsService.auto_investigate_enabled?
 
           incident = Incident.create!(
-            title:            summary.presence || "#{alert_name}: #{affected_service} alert firing",
-            description:      build_description(alert_name, description, labels, annotations),
-            severity:         severity,
-            status:           auto_investigate ? 'investigating' : 'open',
+            title: summary.presence || "#{alert_name}: #{affected_service} alert firing",
+            description: build_description(alert_name, description, labels, annotations),
+            severity: severity,
+            status: auto_investigate ? 'investigating' : 'open',
             affected_service: affected_service,
-            reporter_id:      nil, # system-generated
+            reporter_id: nil # system-generated
           )
 
           session_result = nil
@@ -88,9 +86,9 @@ module Api
 
           if session_result
             incident.update!(
-              devin_session_id:     session_result[:session_id],
-              devin_session_url:    session_result[:url],
-              devin_session_status: 'running',
+              devin_session_id: session_result[:session_id],
+              devin_session_url: session_result[:url],
+              devin_session_status: 'running'
             )
           end
 
@@ -116,13 +114,13 @@ module Api
           Rails.logger.warn("Could not auto-resolve incident #{incident.id} for alert #{alert_name}: #{e.message}")
         end
 
-        def build_description(alert_name, base_description, labels, annotations)
+        def build_description(alert_name, base_description, _labels, annotations)
           parts = [base_description]
           parts << "**Alert**: #{alert_name}" if alert_name.present?
           if (runbook = annotations[:runbook_url].to_s).present?
             parts << "**Runbook**: #{runbook}"
           end
-          parts << "**Source**: Grafana Unified Alerting (auto-generated incident)"
+          parts << '**Source**: Grafana Unified Alerting (auto-generated incident)'
           parts.join("\n\n")
         end
 

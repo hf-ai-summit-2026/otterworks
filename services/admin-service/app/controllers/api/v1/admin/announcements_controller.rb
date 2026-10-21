@@ -43,7 +43,7 @@ module Api
             render json: announcement, serializer: AnnouncementSerializer, status: :created
           else
             render json: { error: 'Validation failed', details: announcement.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 
@@ -62,7 +62,7 @@ module Api
             render json: @announcement, serializer: AnnouncementSerializer
           else
             render json: { error: 'Validation failed', details: @announcement.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 

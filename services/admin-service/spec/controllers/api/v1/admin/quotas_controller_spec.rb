@@ -31,7 +31,7 @@ RSpec.describe Api::V1::Admin::QuotasController do
 
     it 'returns errors for invalid params' do
       put :update, params: { user_id: user_id, quota: { tier: 'invalid' } }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
   end
 end

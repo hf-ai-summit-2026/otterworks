@@ -149,7 +149,7 @@ build-notification: ## Build Notification Service
 	cd services/notification-service && ./gradlew build
 
 build-search: ## Build Search Service
-	cd services/search-service && pip install -e .
+	cd services/search-service && pip install -r requirements-dev.txt
 
 build-analytics: ## Build Analytics Service
 	cd services/analytics-service && sbt compile
