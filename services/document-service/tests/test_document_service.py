@@ -3,8 +3,10 @@
 import uuid
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.document import DocumentVersion
 from app.schemas.document import (
     CommentCreate,
     DocumentCreate,
@@ -53,6 +55,48 @@ async def test_list_documents_with_filters(
 
     items, total = await service.list_documents(folder_id=folder_id)
     assert total == 1
+
+
+@pytest.mark.asyncio
+async def test_list_documents_query_count_independent_of_page_size(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+    for i in range(12):
+        doc = await service.create(
+            DocumentCreate(title=f"Doc {i}", content="", owner_id=owner_id)
+        )
+        for n in range(2, 8):
+            db_session.add(
+                DocumentVersion(
+                    document_id=doc.id,
+                    version_number=n,
+                    title=f"Doc {i} v{n}",
+                    content="",
+                    created_by=owner_id,
+                )
+            )
+    await db_session.commit()
+    db_session.expunge_all()
+
+    statements: list[str] = []
+
+    def _count(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        statements.append(statement)
+
+    sync_engine = db_session.bind.sync_engine
+    event.listen(sync_engine, "before_cursor_execute", _count)
+    try:
+        items, total = await service.list_documents(owner_id=owner_id, size=12)
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _count)
+
+    assert total == 12
+    assert len(items) == 12
+    # count + page + selectin(versions) + selectin(comments) + one batched recent-versions query
+    assert len(statements) <= 5, statements
+    for doc in items:
+        assert [v.version_number for v in doc.recent_versions] == [7, 6, 5, 4, 3]
 
 
 @pytest.mark.asyncio
