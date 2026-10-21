@@ -237,3 +237,19 @@ async def test_paginate_helper():
     assert DocumentService.paginate(11, 1, 5) == 3
     assert DocumentService.paginate(0, 1, 5) == 1
     assert DocumentService.paginate(10, 1, 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_documents_attaches_five_most_recent_versions(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+    busy = await service.create(DocumentCreate(title="v1", content="", owner_id=owner_id))
+    quiet = await service.create(DocumentCreate(title="q", content="", owner_id=owner_id))
+    for n in range(2, 8):
+        await service.update(busy.id, DocumentUpdate(title=f"v{n}", content=""))
+
+    items, _ = await service.list_documents(owner_id=owner_id)
+    by_id = {doc.id: doc for doc in items}
+    assert [v.version_number for v in by_id[busy.id].recent_versions] == [7, 6, 5, 4, 3]
+    assert [v.version_number for v in by_id[quiet.id].recent_versions] == [1]
