@@ -1,7 +1,9 @@
 package config
 
 import (
+	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"strings"
@@ -54,10 +56,51 @@ type Config struct {
 	CBFailureRatio  float64
 }
 
-// Validate checks that required security-sensitive configuration is present.
+// Validate checks that required configuration is present: the JWT secret and an
+// absolute http(s) URL for every backend service. All problems are reported at once.
 func (c *Config) Validate() error {
+	var errs []error
 	if c.JWTSecret == "" {
-		return fmt.Errorf("JWT_SECRET environment variable is required but not set")
+		errs = append(errs, fmt.Errorf("JWT_SECRET environment variable is required but not set"))
+	}
+	for _, svc := range c.backendURLs() {
+		if err := validateBackendURL(svc.value); err != nil {
+			errs = append(errs, fmt.Errorf("%s: %w", svc.env, err))
+		}
+	}
+	return errors.Join(errs...)
+}
+
+type backendURL struct {
+	env   string
+	value string
+}
+
+func (c *Config) backendURLs() []backendURL {
+	return []backendURL{
+		{"AUTH_SERVICE_URL", c.AuthServiceURL},
+		{"FILE_SERVICE_URL", c.FileServiceURL},
+		{"DOCUMENT_SERVICE_URL", c.DocumentServiceURL},
+		{"COLLAB_SERVICE_URL", c.CollabServiceURL},
+		{"NOTIFICATION_SERVICE_URL", c.NotificationServiceURL},
+		{"SEARCH_SERVICE_URL", c.SearchServiceURL},
+		{"ANALYTICS_SERVICE_URL", c.AnalyticsServiceURL},
+		{"ADMIN_SERVICE_URL", c.AdminServiceURL},
+		{"AUDIT_SERVICE_URL", c.AuditServiceURL},
+		{"REPORT_SERVICE_URL", c.ReportServiceURL},
+	}
+}
+
+func validateBackendURL(raw string) error {
+	if raw == "" {
+		return errors.New("backend service URL is required but not set")
+	}
+	u, err := url.Parse(raw)
+	if err != nil {
+		return fmt.Errorf("invalid backend service URL %q: %w", raw, err)
+	}
+	if (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
+		return fmt.Errorf("backend service URL %q must be an absolute http(s) URL", raw)
 	}
 	return nil
 }
