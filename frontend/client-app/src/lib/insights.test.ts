@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { categorize, computeInsights, resolveTopFolders } from "./insights";
+import { categorize, computeInsights, duplicateExtras, largestFiles, resolveTopFolders } from "./insights";
 import type { FileItem } from "@/types";
 
 function file(overrides: Partial<FileItem>): FileItem {
@@ -58,6 +58,76 @@ describe("resolveTopFolders", () => {
   });
 });
 
+describe("duplicateExtras", () => {
+  it("keeps the newest copy and returns the rest", () => {
+    const group = {
+      name: "report.pdf",
+      size: 100,
+      files: [
+        file({ id: "oldest", updatedAt: "2025-01-01T00:00:00Z" }),
+        file({ id: "newest", updatedAt: "2026-01-01T00:00:00Z" }),
+        file({ id: "middle", updatedAt: "2025-06-01T00:00:00Z" }),
+      ],
+      wastedBytes: 200,
+    };
+
+    expect(duplicateExtras(group).map((f) => f.id)).toEqual(["oldest", "middle"]);
+  });
+
+  it("keeps the first copy when updatedAt values tie", () => {
+    const updatedAt = "2026-01-01T00:00:00Z";
+    const group = {
+      name: "report.pdf",
+      size: 100,
+      files: [file({ id: "first", updatedAt }), file({ id: "second", updatedAt })],
+      wastedBytes: 100,
+    };
+
+    expect(duplicateExtras(group).map((f) => f.id)).toEqual(["second"]);
+  });
+});
+
+describe("largestFiles", () => {
+  const items = [
+    file({ id: "nested-image", name: "photo.png", mimeType: "image/png", size: 400, parentId: "fin-q3-inv" }),
+    file({ id: "root-text", name: "notes.txt", mimeType: "text/plain", size: 300 }),
+    file({ id: "root-image", name: "icon.png", mimeType: "image/png", size: 200 }),
+    file({ id: "trashed-image", name: "trash.png", mimeType: "image/png", size: 1000, isTrashed: true }),
+  ];
+
+  it("matches the unfiltered largest list", () => {
+    expect(largestFiles(items, folders).map((f) => f.id)).toEqual([
+      "nested-image",
+      "root-text",
+      "root-image",
+    ]);
+  });
+
+  it("filters by category", () => {
+    expect(largestFiles(items, folders, { category: "Images" }).map((f) => f.id)).toEqual([
+      "nested-image",
+      "root-image",
+    ]);
+  });
+
+  it("filters nested files by their top folder and root files by the root label", () => {
+    expect(largestFiles(items, folders, { topFolder: "Finance" }).map((f) => f.id)).toEqual([
+      "nested-image",
+    ]);
+    expect(largestFiles(items, folders, { topFolder: "Unfiled" }).map((f) => f.id)).toEqual([
+      "root-text",
+      "root-image",
+    ]);
+  });
+
+  it("excludes trashed files and respects the limit", () => {
+    expect(largestFiles(items, folders, {}, 2).map((f) => f.id)).toEqual([
+      "nested-image",
+      "root-text",
+    ]);
+  });
+});
+
 describe("computeInsights", () => {
   const now = new Date("2026-10-21T00:00:00Z");
   const files = [
@@ -106,6 +176,7 @@ describe("computeInsights", () => {
   it("flags stale files", () => {
     expect(insights.staleFiles).toBe(1);
     expect(insights.staleBytes).toBe(100);
+    expect(insights.stale.map((f) => f.id)).toEqual(["4"]);
   });
 
   it("finds duplicates by name and size", () => {
@@ -117,5 +188,19 @@ describe("computeInsights", () => {
   it("lists the largest files first", () => {
     expect(insights.largest[0].size).toBe(2000);
     expect(insights.largest).toHaveLength(4);
+  });
+
+  it("orders stale files oldest first and excludes trashed files", () => {
+    const stale = computeInsights(
+      [
+        file({ id: "later", updatedAt: "2025-01-01T00:00:00Z" }),
+        file({ id: "older", updatedAt: "2024-01-01T00:00:00Z" }),
+        file({ id: "trashed", updatedAt: "2023-01-01T00:00:00Z", isTrashed: true }),
+      ],
+      [],
+      now,
+    );
+
+    expect(stale.stale.map((f) => f.id)).toEqual(["older", "later"]);
   });
 });

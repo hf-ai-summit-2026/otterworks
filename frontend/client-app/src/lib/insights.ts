@@ -30,6 +30,11 @@ export interface BucketStat {
   bytes: number;
 }
 
+export interface InsightFilter {
+  category?: FileCategory;
+  topFolder?: string;
+}
+
 export interface DuplicateGroup {
   name: string;
   size: number;
@@ -43,6 +48,7 @@ export interface StorageInsights {
   averageBytes: number;
   staleFiles: number;
   staleBytes: number;
+  stale: FileItem[];
   byCategory: CategoryStat[];
   byTopFolder: BucketStat[];
   byMonth: BucketStat[];
@@ -100,6 +106,41 @@ export function resolveTopFolders(folders: FolderNode[]): Map<string, string> {
   return result;
 }
 
+function topFolderLabel(parentId: string | null, topFolders: Map<string, string>): string {
+  return (parentId && topFolders.get(parentId)) || UNFILED;
+}
+
+export function duplicateExtras(group: DuplicateGroup): FileItem[] {
+  let newestIndex = 0;
+  let newestUpdatedAt = Number.NEGATIVE_INFINITY;
+
+  group.files.forEach((file, index) => {
+    const updatedAt = new Date(file.updatedAt).getTime();
+    const timestamp = Number.isNaN(updatedAt) ? Number.NEGATIVE_INFINITY : updatedAt;
+    if (timestamp > newestUpdatedAt) {
+      newestIndex = index;
+      newestUpdatedAt = timestamp;
+    }
+  });
+
+  return group.files.filter((_, index) => index !== newestIndex);
+}
+
+export function largestFiles(
+  files: FileItem[],
+  folders: FolderNode[],
+  filter: InsightFilter = {},
+  limit = 10,
+): FileItem[] {
+  const topFolders = resolveTopFolders(folders);
+  return files
+    .filter((file) => !file.isTrashed && !file.isFolder)
+    .filter((file) => !filter.category || categorize(file.mimeType, file.name) === filter.category)
+    .filter((file) => !filter.topFolder || topFolderLabel(file.parentId, topFolders) === filter.topFolder)
+    .sort((a, b) => b.size - a.size)
+    .slice(0, Math.max(0, limit));
+}
+
 function bump(map: Map<string, BucketStat>, label: string, bytes: number) {
   const entry = map.get(label) ?? { label, count: 0, bytes: 0 };
   entry.count += 1;
@@ -124,6 +165,7 @@ export function computeInsights(
   let totalBytes = 0;
   let staleFiles = 0;
   let staleBytes = 0;
+  const stale: FileItem[] = [];
 
   for (const file of live) {
     const size = file.size || 0;
@@ -135,7 +177,7 @@ export function computeInsights(
     cat.bytes += size;
     categories.set(category, cat);
 
-    bump(tops, (file.parentId && topFolder.get(file.parentId)) || UNFILED, size);
+    bump(tops, topFolderLabel(file.parentId, topFolder), size);
 
     const sizeBucket = sizes[SIZE_BUCKETS.findIndex((b) => size < b.max)];
     sizeBucket.count += 1;
@@ -150,6 +192,7 @@ export function computeInsights(
     if (!Number.isNaN(touched) && touched < staleCutoff) {
       staleFiles += 1;
       staleBytes += size;
+      stale.push(file);
     }
 
     const key = `${file.name.toLowerCase()}::${size}`;
@@ -167,6 +210,11 @@ export function computeInsights(
       wastedBytes: g[0].size * (g.length - 1),
     }))
     .sort((a, b) => b.wastedBytes - a.wastedBytes || b.files.length - a.files.length);
+  stale.sort((a, b) => {
+    const aUpdatedAt = new Date(a.updatedAt || a.createdAt).getTime();
+    const bUpdatedAt = new Date(b.updatedAt || b.createdAt).getTime();
+    return aUpdatedAt - bUpdatedAt;
+  });
 
   return {
     totalFiles: live.length,
@@ -174,11 +222,12 @@ export function computeInsights(
     averageBytes: live.length ? Math.round(totalBytes / live.length) : 0,
     staleFiles,
     staleBytes,
+    stale,
     byCategory: [...categories.values()].sort((a, b) => b.bytes - a.bytes),
     byTopFolder: [...tops.values()].sort((a, b) => b.bytes - a.bytes),
     byMonth: [...months.values()].sort((a, b) => a.label.localeCompare(b.label)),
     bySize: sizes,
-    largest: [...live].sort((a, b) => b.size - a.size).slice(0, 10),
+    largest: largestFiles(files, folders),
     duplicates,
     reclaimableBytes: duplicates.reduce((sum, d) => sum + d.wastedBytes, 0),
   };
