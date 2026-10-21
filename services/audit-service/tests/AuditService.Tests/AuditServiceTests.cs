@@ -241,6 +241,57 @@ public class AuditServiceTests
             It.Is<DateTime>(d => d < DateTime.UtcNow.AddDays(-89))), Times.Once);
     }
 
+    [Fact]
+    public async Task GetUserActivityReportAsync_ShouldExcludeEventsOutsidePeriod()
+    {
+        var recent = CreateSampleEvent("e1");
+        recent.Timestamp = DateTime.UtcNow.AddDays(-2);
+        var old = CreateSampleEvent("e2");
+        old.Timestamp = DateTime.UtcNow.AddDays(-10);
+
+        _mockRepository.Setup(r => r.GetAllUserEventsAsync("user-1"))
+            .ReturnsAsync(new List<AuditEvent> { recent, old });
+
+        var report = await _service.GetUserActivityReportAsync("user-1", "7d");
+
+        Assert.Equal(1, report.TotalEvents);
+        Assert.Equal("e1", Assert.Single(report.RecentEvents).Id);
+    }
+
+    [Theory]
+    [InlineData("day", 1)]
+    [InlineData("24h", 1)]
+    [InlineData("week", 7)]
+    [InlineData("7d", 7)]
+    [InlineData("month", 30)]
+    [InlineData("30d", 30)]
+    [InlineData("quarter", 90)]
+    [InlineData("90d", 90)]
+    [InlineData("year", 365)]
+    [InlineData("365d", 365)]
+    [InlineData("WEEK", 7)]
+    [InlineData("unknown", 30)]
+    public async Task GetComplianceReportAsync_ShouldQueryRangeForPeriod(string period, int expectedDays)
+    {
+        DateTime capturedFrom = default;
+        DateTime capturedTo = default;
+        _mockRepository
+            .Setup(r => r.GetEventsByDateRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>()))
+            .Callback<DateTime, DateTime>((from, to) =>
+            {
+                capturedFrom = from;
+                capturedTo = to;
+            })
+            .ReturnsAsync(new List<AuditEvent>());
+
+        var before = DateTime.UtcNow;
+        await _service.GetComplianceReportAsync(period);
+        var after = DateTime.UtcNow;
+
+        Assert.InRange(capturedTo, before, after);
+        Assert.Equal(TimeSpan.FromDays(expectedDays), capturedTo - capturedFrom);
+    }
+
     private static AuditEvent CreateSampleEvent(
         string id = "test-id",
         string userId = "user-1",
