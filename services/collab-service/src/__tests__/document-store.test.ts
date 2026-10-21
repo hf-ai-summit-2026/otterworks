@@ -277,6 +277,17 @@ describe('DocumentStore', () => {
 
       expect(result).toEqual([]);
     });
+
+    it.each([0, -1, -100, 2.5, Number.NaN, '5' as unknown as number])(
+      'should fall back to the default limit for invalid limit %p',
+      async (limit) => {
+        mockRedis.lrange.mockResolvedValue([]);
+
+        await store.getSnapshots('doc-123', limit);
+
+        expect(mockRedis.lrange).toHaveBeenCalledWith('doc:snapshots:doc-123', 0, 19);
+      },
+    );
   });
 
   describe('getSnapshotState', () => {

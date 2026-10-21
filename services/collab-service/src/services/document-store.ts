@@ -133,8 +133,11 @@ export class DocumentStore {
   }
 
   async getSnapshots(documentId: string, limit = 20): Promise<DocumentSnapshot[]> {
+    // `limit` arrives from socket clients; a non-positive or non-integer value would
+    // otherwise produce a negative/NaN LRANGE stop index (e.g. -1 -> stop -2 = whole list).
+    const safeLimit = Number.isInteger(limit) && limit > 0 ? limit : 20;
     const key = `${DOC_SNAPSHOTS_KEY}${documentId}`;
-    const raw = await this.redis.lrange(key, 0, limit - 1);
+    const raw = await this.redis.lrange(key, 0, safeLimit - 1);
     return raw.map((item) => JSON.parse(item) as DocumentSnapshot);
   }
 
