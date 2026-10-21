@@ -174,6 +174,38 @@ Before/after numbers for the PR body come from the two report files
 (`metrics.p95_seconds`, `metrics.queries_per_request`) or from
 `make incident-load SCENARIO=n-plus-one DURATION=60` on each build.
 
+## Show it in the browser (n-plus-one)
+
+The gates prove the fix to a machine; a recording proves it to the on-call
+engineer. Run the stack with `UI=1` and record the page users complain about,
+slow before the fix and fast after, under the same armed load.
+
+```bash
+make incident-up UI=1         # adds auth-service, api-gateway, web-app; then runs make incident-ui-login
+make arm SCENARIO=n-plus-one  # load must be running while you record
+```
+
+- Open `http://localhost:3000/login` in your own browser and sign in as
+  `oncall@otterworks.dev` / `OnCall-Demo-1`. That user is the fixture owner
+  (`seed.owner_id`), created by `incident/ui-login.sql`; it is local Compose demo
+  data only. `make incident-ui-login` re-creates it if the database was reset.
+- Open DevTools → Network (filter `documents`, "Disable cache" on), start a
+  screen recording, then load `http://localhost:3000/documents` two or three
+  times. Click the `documents?page=1&pageSize=50` request so the recording shows
+  its **Time** and the `x-db-queries` / `x-request-duration-ms` response headers.
+- The web app sends `pageSize`, which document-service ignores, so the browser
+  page lists 20 documents (24 statements, ~0.5-0.8 s under load), not the 100
+  rows the load generator requests (104 statements, ~2-3 s). Quote the numbers
+  the recording shows; do not change the web app to make the page slower.
+- After rebuilding document-service, with the scenario still armed (before or
+  during `EXPECT=after`; never after `make disarm`), repeat the same steps on the
+  same URL: the batched fix brings the same request to 5 statements and a
+  fraction of the before time. One recording with both halves, or two short
+  ones, labelled before/after.
+- Attach the recording to the PR (embed the video file path in the PR body or a
+  PR comment so it uploads) next to the Grafana and Jaeger screenshots, with one
+  line: `/documents: <before ms>, <before> statements -> <after ms>, <after> statements`.
+
 ## The page and the automation
 
 Alertmanager always posts the firing alert to the local sink
