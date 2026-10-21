@@ -105,15 +105,31 @@ class DocumentService:
         result = await self.db.execute(query)
         documents = list(result.scalars().all())
 
-        # TODO: This is slow for large result sets (ETL-445, deferred Q2 2024)
-        for doc in documents:
+        recent: dict[UUID, list[DocumentVersion]] = {doc.id: [] for doc in documents}
+        if documents:
+            ranked = (
+                select(
+                    DocumentVersion.id,
+                    func.row_number()
+                    .over(
+                        partition_by=DocumentVersion.document_id,
+                        order_by=DocumentVersion.version_number.desc(),
+                    )
+                    .label("rank"),
+                )
+                .where(DocumentVersion.document_id.in_(recent))
+                .subquery()
+            )
             ver_result = await self.db.execute(
                 select(DocumentVersion)
-                .where(DocumentVersion.document_id == doc.id)
-                .order_by(DocumentVersion.version_number.desc())
-                .limit(5)
+                .join(ranked, ranked.c.id == DocumentVersion.id)
+                .where(ranked.c.rank <= 5)
+                .order_by(DocumentVersion.document_id, DocumentVersion.version_number.desc())
             )
-            doc.recent_versions = list(ver_result.scalars().all())
+            for version in ver_result.scalars():
+                recent[version.document_id].append(version)
+        for doc in documents:
+            doc.recent_versions = recent[doc.id]
 
         return documents, total
 
