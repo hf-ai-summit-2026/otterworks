@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from app.config import MeiliSearchConfig
 from app.services.indexer import Indexer
@@ -122,3 +123,85 @@ class TestIndexer:
     def test_process_event_unknown_action(self, indexer: Indexer):
         result = indexer.process_event({"action": "unknown", "data": {}})
         assert result is None
+
+
+def _response(status: int, payload: dict | None = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status
+    resp.json.return_value = payload or {}
+    return resp
+
+
+class TestReindexFetch:
+    def test_documents_paginate_until_empty_page(self):
+        pages = [
+            _response(200, {"documents": [{"id": "d1", "title": "One", "owner_id": "u1"}]}),
+            _response(200, {"items": [{"id": "d2", "title": "Two"}]}),
+            _response(200, {"documents": []}),
+        ]
+        with patch("app.services.indexer.requests.get", side_effect=pages) as mock_get:
+            docs = Indexer._fetch_all_documents()
+        assert [d["id"] for d in docs] == ["d1", "d2"]
+        assert docs[0] == {
+            "id": "d1",
+            "title": "One",
+            "content": "",
+            "owner_id": "u1",
+            "tags": [],
+            "created_at": None,
+            "updated_at": None,
+            "type": "document",
+        }
+        assert [c.kwargs["params"]["page"] for c in mock_get.call_args_list] == [1, 2, 3]
+        assert mock_get.call_args.args[0] == "http://document-service:8083/api/v1/documents/"
+
+    def test_files_accept_camel_case_fields(self):
+        pages = [
+            _response(200, {"data": [{
+                "id": "f1",
+                "name": "a.pdf",
+                "mimeType": "application/pdf",
+                "ownerId": "u1",
+                "folderId": "fold",
+                "sizeBytes": 7,
+                "createdAt": "c",
+                "updatedAt": "u",
+            }]}),
+            _response(200, {}),
+        ]
+        with patch("app.services.indexer.requests.get", side_effect=pages) as mock_get:
+            files = Indexer._fetch_all_files()
+        assert files == [{
+            "id": "f1",
+            "name": "a.pdf",
+            "mime_type": "application/pdf",
+            "owner_id": "u1",
+            "folder_id": "fold",
+            "tags": [],
+            "size": 7,
+            "created_at": "c",
+            "updated_at": "u",
+            "type": "file",
+        }]
+        assert mock_get.call_args.args[0] == "http://file-service:8082/api/v1/files"
+
+    def test_non_200_stops_fetch(self):
+        with patch("app.services.indexer.requests.get", return_value=_response(503)):
+            assert Indexer._fetch_all_files() == []
+
+    def test_request_error_stops_fetch(self):
+        pages = [
+            _response(200, {"files": [{"id": "f1", "name": "a"}]}),
+            requests.ConnectionError("down"),
+        ]
+        with patch("app.services.indexer.requests.get", side_effect=pages):
+            files = Indexer._fetch_all_files()
+        assert [f["id"] for f in files] == ["f1"]
+
+    def test_reindex_passes_fetched_data(self, indexer: Indexer):
+        with (
+            patch.object(Indexer, "_fetch_all_documents", return_value=[{"id": "d1"}]),
+            patch.object(Indexer, "_fetch_all_files", return_value=[]),
+        ):
+            result = indexer.reindex()
+        assert result["indexed_counts"] == {"documents": 1, "files": 0}

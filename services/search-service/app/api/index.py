@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import structlog
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, current_app, jsonify, request
 
 from app.api.health import INDEX_COUNT
 from app.services.indexer import Indexer
@@ -16,8 +16,6 @@ index_bp = Blueprint("index", __name__)
 
 def _get_indexer() -> Indexer:
     """Get an Indexer instance from the current app config."""
-    from flask import current_app
-
     search_service: MeiliSearchService = current_app.config["SEARCH_SERVICE"]
     return Indexer(search_service)
 
