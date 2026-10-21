@@ -24,7 +24,7 @@ module Api
             render json: @quota, serializer: StorageQuotaSerializer
           else
             render json: { error: 'Validation failed', details: @quota.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 

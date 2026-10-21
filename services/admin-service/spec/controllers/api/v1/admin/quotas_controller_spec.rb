@@ -10,7 +10,7 @@ RSpec.describe Api::V1::Admin::QuotasController do
     it 'returns the storage quota for a user' do
       get :show, params: { user_id: user_id }
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['user_id']).to eq(user_id)
       expect(body['tier']).to eq('free')
     end
@@ -25,13 +25,13 @@ RSpec.describe Api::V1::Admin::QuotasController do
     it 'updates the quota' do
       put :update, params: { user_id: user_id, quota: { tier: 'pro', quota_bytes: 214_748_364_800 } }
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['tier']).to eq('pro')
     end
 
     it 'returns errors for invalid params' do
       put :update, params: { user_id: user_id, quota: { tier: 'invalid' } }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
   end
 end

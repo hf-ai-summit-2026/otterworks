@@ -38,7 +38,7 @@ module Api
 
         def apply_time_filters(scope)
           scope = scope.since(parse_time!(params[:since])) if params[:since].present?
-          scope = scope.where('created_at <= ?', parse_time!(params[:until])) if params[:until].present?
+          scope = scope.where(created_at: ..parse_time!(params[:until])) if params[:until].present?
           scope
         end
 

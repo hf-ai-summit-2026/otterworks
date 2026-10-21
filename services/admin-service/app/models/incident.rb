@@ -8,10 +8,10 @@ class Incident < ApplicationRecord
   ].freeze
 
   VALID_TRANSITIONS = {
-    'open'          => %w[investigating resolved],
+    'open' => %w[investigating resolved],
     'investigating' => %w[resolved],
-    'resolved'      => %w[closed],
-    'closed'        => %w[]
+    'resolved' => %w[closed],
+    'closed' => %w[]
   }.freeze
 
   validates :title, presence: true, length: { maximum: 255 }
@@ -44,6 +44,22 @@ class Incident < ApplicationRecord
     %w[open investigating].include?(status)
   end
 
+  def self.devin_session_attributes(session_result)
+    {
+      devin_session_id: session_result[:session_id],
+      devin_session_url: session_result[:url],
+      devin_session_status: 'running'
+    }
+  end
+
+  def sync_devin_session(session_info)
+    update(
+      devin_session_status: session_info[:status],
+      devin_session_url: session_info[:url] || devin_session_url
+    )
+  end
+
+  # rubocop:disable Naming/PredicatePrefix -- public method names used by controllers
   def has_devin_session?
     devin_session_id.present?
   end
@@ -51,6 +67,7 @@ class Incident < ApplicationRecord
   def has_active_devin_session?
     devin_session_id.present? && devin_session_status == 'running'
   end
+  # rubocop:enable Naming/PredicatePrefix
 
   private
 

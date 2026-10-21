@@ -9,20 +9,20 @@ RSpec.describe Api::V1::Admin::AuditLogsController do
     it 'returns paginated audit logs' do
       get :index
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['audit_logs'].length).to eq(3)
     end
 
     it 'filters by action type' do
       create(:audit_log, action: 'feature_flag.created')
       get :index, params: { action_type: 'feature_flag.created' }
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['audit_logs'].all? { |l| l['action'] == 'feature_flag.created' }).to be true
     end
 
     it 'filters by resource type' do
       get :index, params: { resource_type: 'AdminUser' }
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['audit_logs'].all? { |l| l['resource_type'] == 'AdminUser' }).to be true
     end
   end
@@ -33,7 +33,7 @@ RSpec.describe Api::V1::Admin::AuditLogsController do
     it 'returns the audit log entry' do
       get :show, params: { id: log.id }
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['id']).to eq(log.id)
     end
   end

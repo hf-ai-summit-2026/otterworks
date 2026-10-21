@@ -9,14 +9,14 @@ RSpec.describe Api::V1::Admin::AnnouncementsController do
     it 'returns all announcements' do
       get :index
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['announcements'].length).to eq(3)
     end
 
     it 'filters by status' do
       create(:announcement, :published)
       get :index, params: { status: 'published' }
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['announcements'].all? { |a| a['status'] == 'published' }).to be true
     end
   end
@@ -35,7 +35,7 @@ RSpec.describe Api::V1::Admin::AnnouncementsController do
 
     it 'returns errors for invalid params' do
       post :create, params: { announcement: { title: '' } }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
   end
 
@@ -45,7 +45,7 @@ RSpec.describe Api::V1::Admin::AnnouncementsController do
     it 'updates the announcement' do
       put :update, params: { id: announcement.id, announcement: { status: 'published' } }
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['status']).to eq('published')
     end
   end

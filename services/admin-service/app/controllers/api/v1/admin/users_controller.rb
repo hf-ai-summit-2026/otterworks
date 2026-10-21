@@ -43,7 +43,7 @@ module Api
             render json: @user, serializer: AdminUserSerializer, include_quota: true
           else
             render json: { error: 'Validation failed', details: @user.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 

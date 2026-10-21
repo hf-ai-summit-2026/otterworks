@@ -17,7 +17,7 @@ class AuditLog < ApplicationRecord
   }
   scope :by_actor, ->(actor_id) { where(actor_id: actor_id) }
   scope :recent, -> { order(created_at: :desc) }
-  scope :since, ->(time) { where('created_at >= ?', time) }
+  scope :since, ->(time) { where(created_at: time..) }
 
   def self.record!(action:, resource_type:, resource_id: nil, actor_id: nil, actor_email: nil,
                    changes_made: {}, ip_address: nil, user_agent: nil)

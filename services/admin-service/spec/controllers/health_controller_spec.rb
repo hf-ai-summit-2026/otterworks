@@ -5,7 +5,7 @@ RSpec.describe HealthController do
     it 'returns healthy status' do
       get :show
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['status']).to eq('healthy')
       expect(body['service']).to eq('admin-service')
     end
