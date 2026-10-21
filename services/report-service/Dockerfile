@@ -3,6 +3,8 @@
 FROM maven:3.8.7-eclipse-temurin-8 AS builder
 
 WORKDIR /app
+ARG MAVEN_MIRROR=
+RUN if [ -n "$MAVEN_MIRROR" ]; then mkdir -p /root/.m2 && printf '<settings><mirrors><mirror><id>maven-mirror</id><mirrorOf>central</mirrorOf><url>%s</url></mirror></mirrors></settings>\n' "$MAVEN_MIRROR" > /root/.m2/settings.xml; fi
 COPY pom.xml .
 # Download dependencies first for Docker layer caching
 RUN mvn dependency:go-offline -B

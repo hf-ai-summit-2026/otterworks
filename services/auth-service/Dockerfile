@@ -1,6 +1,8 @@
 FROM gradle:8.6-jdk17 AS builder
 
 WORKDIR /app
+ARG MAVEN_MIRROR=
+COPY maven-mirror.init.gradle /root/.gradle/init.d/
 COPY build.gradle settings.gradle ./
 COPY gradle ./gradle
 RUN gradle dependencies --no-daemon || true
