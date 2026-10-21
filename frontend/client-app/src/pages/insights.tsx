@@ -293,7 +293,7 @@ function InsightsContent() {
             <button
               type="button"
               onClick={() => setFilter({})}
-              className="rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
+              className="whitespace-nowrap rounded-md border border-gray-200 px-2 py-1 text-xs font-medium text-gray-600 hover:bg-gray-50"
             >
               Clear filter
             </button>
