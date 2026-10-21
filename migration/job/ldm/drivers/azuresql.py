@@ -251,7 +251,7 @@ class AzureSqlTarget:
         self._exec(
             "DECLARE @u sysname = ?, @p nvarchar(128) = ?, @q nvarchar(max);\n"
             "SET @q = CASE WHEN DATABASE_PRINCIPAL_ID(@u) IS NULL THEN N'CREATE USER ' ELSE N'ALTER USER ' END "
-            "+ QUOTENAME(@u) + N' WITH PASSWORD = ' + QUOTENAME(@p, N'''');\n"
+            "+ QUOTENAME(@u) + N' WITH PASSWORD = N' + QUOTENAME(@p, N'''');\n"
             "EXEC sp_executesql @q;\n"
             "IF IS_ROLEMEMBER(N'ldm_report_reader', @u) = 0\n"
             "BEGIN SET @q = N'ALTER ROLE ldm_report_reader ADD MEMBER ' + QUOTENAME(@u); EXEC sp_executesql @q; END",
