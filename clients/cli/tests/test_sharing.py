@@ -55,6 +55,9 @@ def install_share_client(
     shares=None,
     users=None,
     shared_files=None,
+    metadata_files=None,
+    metadata_errors=None,
+    versions=None,
 ):
     folders = deepcopy(
         folders
@@ -76,6 +79,9 @@ def install_share_client(
         }
     )
     calls = []
+    metadata_files = deepcopy(metadata_files or {})
+    metadata_errors = metadata_errors or {}
+    versions = deepcopy(versions or {})
 
     def handler(request):
         path = request.url.path
@@ -144,8 +150,23 @@ def install_share_client(
                     200,
                     json={"url": "http://localstack:4566/bucket/report.txt?sig=test"},
                 )
+            if suffix.endswith("/versions"):
+                file_id = suffix.removesuffix("/versions")
+                return httpx.Response(
+                    200, json={"versions": versions.get(file_id, [])}
+                )
             file_id = suffix
-            file = next(file for file in files if file["id"] == file_id)
+            if file_id in metadata_errors:
+                return httpx.Response(
+                    metadata_errors[file_id],
+                    json={"message": "Access denied"},
+                )
+            file = next(
+                (file for file in files if file["id"] == file_id),
+                metadata_files.get(file_id),
+            )
+            if file is None:
+                return httpx.Response(404, json={"message": "File not found"})
             return httpx.Response(
                 200,
                 json={**file, "shared_with": shares.get(file_id, [])},
@@ -363,7 +384,9 @@ def test_info_folder_shows_recursive_counts(monkeypatch, tmp_path, capsys):
 def test_cat_streams_exact_bytes_and_rewrites_download_host(
     monkeypatch, tmp_path
 ):
-    calls, _shares = install_share_client(monkeypatch, tmp_path, files=[])
+    calls, _shares = install_share_client(
+        monkeypatch, tmp_path, files=[], metadata_files={FILE_ID: fixture_file()}
+    )
     monkeypatch.setenv("OTTER_DOWNLOAD_HOST", "localhost:4566")
     output = io.BytesIO()
     monkeypatch.setattr(cli_module.sys, "stdout", SimpleNamespace(buffer=output))
@@ -372,7 +395,153 @@ def test_cat_streams_exact_bytes_and_rewrites_download_host(
 
     assert output.getvalue() == DOWNLOAD_BYTES
     assert any(
+        call[0] == "GET" and call[1] == f"/api/v1/files/{FILE_ID}"
+        for call in calls
+    )
+    assert any(
         call[0] == "GET"
         and call[1] == f"/api/v1/files/{FILE_ID}/download"
+        for call in calls
+    )
+
+
+@pytest.mark.parametrize("command", ["cat", "download", "info"])
+def test_shared_file_uuid_falls_back_to_metadata(
+    monkeypatch, tmp_path, capsys, command
+):
+    calls, _shares = install_share_client(
+        monkeypatch, tmp_path, files=[], metadata_files={FILE_ID: fixture_file()}
+    )
+    monkeypatch.setenv("OTTER_DOWNLOAD_HOST", "localhost:4566")
+    destination = tmp_path / "shared-copy.bin"
+
+    if command == "cat":
+        output = io.BytesIO()
+        monkeypatch.setattr(cli_module.sys, "stdout", SimpleNamespace(buffer=output))
+        assert cli_module.main(["cat", FILE_ID]) == 0
+        assert output.getvalue() == DOWNLOAD_BYTES
+    elif command == "download":
+        assert cli_module.main(["download", FILE_ID, "-o", str(destination)]) == 0
+        assert destination.read_bytes() == DOWNLOAD_BYTES
+    else:
+        assert cli_module.main(["info", FILE_ID, "--json"]) == 0
+        result = json.loads(capsys.readouterr().out)
+        assert result["id"] == FILE_ID
+        assert result["path"] == "(shared) report.txt"
+
+    assert sum(
+        call[0] == "GET" and call[1] == f"/api/v1/files/{FILE_ID}"
+        for call in calls
+    ) == 1
+
+
+@pytest.mark.parametrize("status", [403, 404])
+def test_shared_file_metadata_forbidden_or_missing_maps_to_not_found(
+    monkeypatch, tmp_path, capsys, status
+):
+    install_share_client(
+        monkeypatch,
+        tmp_path,
+        files=[],
+        metadata_errors={FILE_ID: status},
+    )
+
+    assert cli_module.main(["info", FILE_ID]) == 1
+
+    assert f"File not found: {FILE_ID}" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("command", ["cat", "download"])
+def test_cat_and_download_still_refuse_folder_uuids(
+    monkeypatch, tmp_path, capsys, command
+):
+    calls, _shares = install_share_client(monkeypatch, tmp_path)
+    arguments = ["cat", FINANCE_ID] if command == "cat" else [
+        "download",
+        FINANCE_ID,
+    ]
+
+    assert cli_module.main(arguments) == 1
+
+    assert "is a folder" in capsys.readouterr().err
+    assert not any(call[1] == f"/api/v1/files/{FINANCE_ID}" for call in calls)
+
+
+def test_versions_sorts_newest_first_and_caches_created_by_email(
+    monkeypatch, tmp_path, capsys
+):
+    versions = [
+        {
+            "file_id": FILE_ID,
+            "version": 1,
+            "s3_key": "private/old-key",
+            "size_bytes": 8,
+            "created_by": OWNER_ID,
+            "created_at": "2025-01-01T00:00:00Z",
+        },
+        {
+            "file_id": FILE_ID,
+            "version": 2,
+            "s3_key": "private/new-key",
+            "size_bytes": 16,
+            "created_by": OWNER_ID,
+            "created_at": "2025-01-02T00:00:00Z",
+        },
+    ]
+    calls, _shares = install_share_client(
+        monkeypatch, tmp_path, versions={FILE_ID: versions}
+    )
+
+    assert cli_module.main(["versions", FILE_ID]) == 0
+
+    output = capsys.readouterr().out
+    version_rows = [
+        line.strip().split()[0]
+        for line in output.splitlines()
+        if line.strip().split()[:1] in (["1"], ["2"])
+    ]
+    assert version_rows == ["2", "1"]
+    assert OWNER_EMAIL in output
+    assert "old-key" not in output and "new-key" not in output
+    assert sum(
+        call[0] == "GET" and call[1] == f"/api/v1/auth/users/by-id/{OWNER_ID}"
+        for call in calls
+    ) == 1
+
+
+def test_versions_json_prints_normalized_response_without_reordering(
+    monkeypatch, tmp_path, capsys
+):
+    versions = [
+        {
+            "file_id": FILE_ID,
+            "version": 1,
+            "s3_key": "private/old-key",
+            "size_bytes": 8,
+            "created_by": OWNER_ID,
+            "created_at": "2025-01-01T00:00:00Z",
+        },
+        {
+            "file_id": FILE_ID,
+            "version": 2,
+            "s3_key": "private/new-key",
+            "size_bytes": 16,
+            "created_by": OWNER_ID,
+            "created_at": "2025-01-02T00:00:00Z",
+        },
+    ]
+    calls, _shares = install_share_client(
+        monkeypatch, tmp_path, versions={FILE_ID: versions}
+    )
+
+    assert cli_module.main(["versions", FILE_ID, "--json"]) == 0
+
+    output = json.loads(capsys.readouterr().out)
+    assert output["versions"][0]["version"] == 1
+    assert output["versions"][0]["fileId"] == FILE_ID
+    assert output["versions"][0]["sizeBytes"] == 8
+    assert output["versions"][0]["s3Key"] == "private/old-key"
+    assert any(
+        call[0] == "GET" and call[1] == f"/api/v1/files/{FILE_ID}/versions"
         for call in calls
     )

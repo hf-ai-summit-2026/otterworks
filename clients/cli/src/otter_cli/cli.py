@@ -581,7 +581,9 @@ def _upload(args: argparse.Namespace, client: OtterClient) -> int:
 def _download(args: argparse.Namespace, client: OtterClient) -> int:
     folders = client.list_folder_tree()
     files = client.list_all_files()
-    selected = [resolve_file(path, folders, files) for path in args.paths]
+    selected = [
+        _resolve_file_or_id(path, client, folders, files) for path in args.paths
+    ]
     destination = Path(args.output).expanduser() if args.output else None
     if destination and len(selected) > 1 and destination.exists() and not destination.is_dir():
         raise ValueError("A destination directory is required for multiple downloads")
@@ -600,7 +602,7 @@ def _download(args: argparse.Namespace, client: OtterClient) -> int:
         if not url:
             raise ValueError(f"Download URL missing for {name}")
         client.download_to(str(url), output)
-        print(f"{file_path(file, folders)} -> {output}")
+        print(f"{_file_path_or_shared(file, folders, files)} -> {output}")
     return 0
 
 
@@ -719,6 +721,42 @@ def _user_email(
     return cache[user_id] or user_id
 
 
+def _resolve_file_or_id(
+    path: str,
+    client: OtterClient,
+    folders: list[dict[str, Any]],
+    files: list[dict[str, Any]],
+) -> dict[str, Any]:
+    try:
+        return resolve_file(path, folders, files)
+    except PathResolutionError:
+        raw = path.strip()
+        if not _looks_like_id(raw):
+            raise
+        file_id = str(uuid.UUID(raw))
+        if any(str(folder.get("id", "")).lower() == file_id for folder in folders):
+            raise ValueError(f"{path} is a folder; this command only accepts files")
+        try:
+            file = client.get(f"/files/{file_id}")
+        except ApiError as error:
+            if error.status_code in {403, 404}:
+                raise PathResolutionError(f"File not found: {path}") from error
+            raise
+        if not isinstance(file, dict) or not file.get("id"):
+            raise PathResolutionError(f"File not found: {path}")
+        return file
+
+
+def _file_path_or_shared(
+    file: dict[str, Any],
+    folders: list[dict[str, Any]],
+    files: list[dict[str, Any]],
+) -> str:
+    if any(str(item.get("id")) == str(file.get("id")) for item in files):
+        return file_path(file, folders)
+    return f"(shared) {file.get('name', '')}"
+
+
 def _resolve_shared_file(
     path: str, client: OtterClient
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
@@ -800,7 +838,12 @@ def _shared(args: argparse.Namespace, client: OtterClient) -> int:
 def _info(args: argparse.Namespace, client: OtterClient) -> int:
     folders = client.list_folder_tree()
     files = client.list_all_files()
-    kind, item = _resolve_item(args.path, folders, files)
+    resolved_by_id = False
+    try:
+        kind, item = _resolve_item(args.path, folders, files)
+    except PathResolutionError:
+        kind, item = "file", _resolve_file_or_id(args.path, client, folders, files)
+        resolved_by_id = True
     if kind == "folder":
         path = folder_path(_item_id(kind, item), folders)
         total = du_rows(_item_id(kind, item), folders, files)[-1]
@@ -829,7 +872,16 @@ def _info(args: argparse.Namespace, client: OtterClient) -> int:
             )
         return 0
 
-    metadata = client.get(f"/files/{_item_id(kind, item)}")
+    if not resolved_by_id:
+        item = _resolve_file_or_id(args.path, client, folders, files)
+    is_shared = not any(
+        str(file.get("id")) == str(item.get("id")) for file in files
+    )
+    metadata = (
+        item
+        if is_shared
+        else client.get(f"/files/{_item_id(kind, item)}")
+    )
     shares = []
     cache: dict[str, str | None] = {}
     for share in metadata.get("sharedWith", []):
@@ -837,7 +889,11 @@ def _info(args: argparse.Namespace, client: OtterClient) -> int:
         user_id = str(share.get("sharedWith") or "")
         resolved["email"] = _user_email(client, user_id, cache) if user_id else ""
         shares.append(resolved)
-    data = {**metadata, "path": file_path(item, folders), "sharedWith": shares}
+    data = {
+        **metadata,
+        "path": _file_path_or_shared(item, folders, files),
+        "sharedWith": shares,
+    }
     if args.json:
         _json(data)
         return 0
@@ -868,16 +924,8 @@ def _cat(args: argparse.Namespace, client: OtterClient) -> int:
     files = client.list_all_files()
     output = sys.stdout.buffer
     for path in args.paths:
-        try:
-            file_id = str(uuid.UUID(path.strip()))
-        except ValueError:
-            file = resolve_file(path, folders, files)
-            file_id = str(file["id"])
-        else:
-            file = next((item for item in files if str(item.get("id")) == file_id), None)
-            if any(str(folder.get("id")) == file_id for folder in folders):
-                raise ValueError(f"{path} is a folder; cat only accepts files")
-        download = client.get(f"/files/{file_id}/download")
+        file = _resolve_file_or_id(path, client, folders, files)
+        download = client.get(f"/files/{file['id']}/download")
         url = download.get("url") if isinstance(download, dict) else None
         if not url:
             name = file.get("name", path) if file else path
@@ -885,6 +933,37 @@ def _cat(args: argparse.Namespace, client: OtterClient) -> int:
         for chunk in client.stream_download(str(url)):
             output.write(chunk)
     output.flush()
+    return 0
+
+
+def _versions(args: argparse.Namespace, client: OtterClient) -> int:
+    folders = client.list_folder_tree()
+    files = client.list_all_files()
+    file = _resolve_file_or_id(args.path, client, folders, files)
+    response = client.get(f"/files/{file['id']}/versions")
+    if args.json:
+        _json(response)
+        return 0
+    versions = sorted(
+        response.get("versions", []),
+        key=lambda version: int(version.get("version", 0)),
+        reverse=True,
+    )
+    cache: dict[str, str | None] = {}
+    _print_table(
+        ["VERSION", "SIZE", "CREATED", "CREATED BY"],
+        [
+            [
+                version.get("version", ""),
+                format_size(_size(version)),
+                _format_time(version.get("createdAt")),
+                _user_email(client, str(version.get("createdBy")), cache)
+                if version.get("createdBy")
+                else "-",
+            ]
+            for version in versions
+        ],
+    )
     return 0
 
 
@@ -998,6 +1077,11 @@ def build_parser() -> argparse.ArgumentParser:
     cat = commands.add_parser("cat")
     cat.add_argument("paths", nargs="+")
     cat.set_defaults(handler=_cat)
+
+    versions = commands.add_parser("versions")
+    versions.add_argument("path")
+    versions.add_argument("--json", action="store_true")
+    versions.set_defaults(handler=_versions)
     return parser
 
 

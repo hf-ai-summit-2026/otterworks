@@ -44,6 +44,8 @@ otter shared --json
 otter info /Finance/Reports/q1.xlsx
 otter info /Finance --json
 otter cat /Finance/Reports/q1.xlsx
+otter versions /Finance/Reports/q1.xlsx
+otter versions /Finance/Reports/q1.xlsx --json
 
 otter upload ./report.pdf --to /Finance/Reports
 otter upload ./quarterly-folder -r --to /Finance
@@ -65,6 +67,10 @@ changes a file or folder name within its current parent.
 `share` and `unshare` manage file access by user email; folders are not shareable.
 `shared` lists files shared with the signed-in user. `info` shows file metadata and shares,
 or recursive totals for a folder. `cat` streams file contents to standard output.
+Use a file UUID from `otter shared` to address shared files with `download`, `info`, and
+`cat`. `versions` lists a file's version history; `--json` emits normalized version data.
+Re-uploading the same name into the same folder creates a separate file, not a new version;
+versions are associated with an individual file ID.
 
 ## Environment
 
