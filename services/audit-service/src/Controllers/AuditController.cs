@@ -71,12 +71,14 @@ public static class AuditController
         int? size,
         IAuditService auditService)
     {
-        var pageNumber = page ?? 1;
-        var pageSize = Math.Clamp(size ?? 20, 1, 100);
+        var (pageNumber, pageSize) = NormalizePaging(page, size);
 
         var result = await auditService.QueryEventsAsync(user_id, action, resource_type, resource, from, to, pageNumber, pageSize);
         return Results.Ok(result);
     }
+
+    public static (int Page, int PageSize) NormalizePaging(int? page, int? size) =>
+        (Math.Max(page ?? 1, 1), Math.Clamp(size ?? 20, 1, 100));
 
     private static async Task<IResult> GetEvent(
         string id,
