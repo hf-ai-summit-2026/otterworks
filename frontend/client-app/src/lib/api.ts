@@ -319,6 +319,32 @@ export const filesApi = {
     const { data } = await apiClient.put<Record<string, unknown>>(`/folders/${id}`, { name });
     return normalizeFileItem({ ...data, isFolder: true });
   },
+  listAll: async (): Promise<FileItem[]> => {
+    const PAGE_LIMIT = 100;
+    const first = await apiClient.get<RawFileListResponse>("/files", {
+      params: { page: 1, page_size: PAGE_LIMIT },
+    });
+    const total = first.data.total ?? 0;
+    const pages = Math.ceil(total / PAGE_LIMIT);
+    const rest = await Promise.all(
+      Array.from({ length: Math.max(pages - 1, 0) }, (_, i) =>
+        apiClient.get<RawFileListResponse>("/files", {
+          params: { page: i + 2, page_size: PAGE_LIMIT },
+        }),
+      ),
+    );
+    return [first, ...rest].flatMap((res) => (res.data.files ?? []).map(mapRawFile));
+  },
+  listFolderTree: async (): Promise<FileItem[]> => {
+    const all: FileItem[] = [];
+    let level = await filesApi.listFolders(null);
+    while (level.length > 0) {
+      all.push(...level);
+      const children = await Promise.all(level.map((f) => filesApi.listFolders(f.id)));
+      level = children.flat();
+    }
+    return all;
+  },
   getRecent: async (limit = 10): Promise<FileItem[]> => {
     const params: Record<string, string | number> = { page: 1, page_size: limit };
     const { data } = await apiClient.get<RawFileListResponse>("/files", { params });

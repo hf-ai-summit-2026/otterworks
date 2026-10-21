@@ -8,6 +8,7 @@ import DocumentsPage from "@/pages/documents";
 import DocumentEditorPage from "@/pages/document-editor";
 import FilesPage from "@/pages/files";
 import FileDetailPage from "@/pages/file-detail";
+import InsightsPage from "@/pages/insights";
 import LoginPage from "@/pages/login";
 import MarginsPage from "@/pages/margins";
 import RegisterPage from "@/pages/register";
@@ -50,6 +51,7 @@ export default function App() {
           <Route path="/documents/:id" element={<DocumentEditorPage />} />
           <Route path="/files" element={<FilesPage />} />
           <Route path="/files/:id" element={<FileDetailPage />} />
+          <Route path="/insights" element={<InsightsPage />} />
           <Route path="/login" element={<LoginPage />} />
           <Route path="/margins" element={<MarginsPage />} />
           <Route path="/register" element={<RegisterPage />} />
