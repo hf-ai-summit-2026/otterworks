@@ -22,17 +22,15 @@ module Api
 
         SEVERITY_MAP = {
           'critical' => 'critical',
-          'high'     => 'high',
-          'warning'  => 'medium',
-          'info'     => 'low',
+          'high' => 'high',
+          'warning' => 'medium',
+          'info' => 'low'
         }.freeze
 
         # POST /api/v1/admin/alerts/ingest
         def ingest
           alerts = params[:alerts]
-          unless alerts.is_a?(Array)
-            return render json: { error: 'Missing alerts array' }, status: :bad_request
-          end
+          return render json: { error: 'Missing alerts array' }, status: :bad_request unless alerts.is_a?(Array)
 
           processed = alerts.map { |alert| process_alert(alert) }.compact
 
@@ -42,72 +40,80 @@ module Api
         private
 
         def process_alert(alert)
-          status           = alert[:status].to_s
           labels           = alert[:labels] || {}
-          annotations      = alert[:annotations] || {}
           alert_name       = labels[:alertname].to_s
           affected_service = labels[:affected_service].to_s.presence || labels[:service].to_s.presence
-          severity         = SEVERITY_MAP.fetch(labels[:severity].to_s, 'medium')
-          summary          = annotations[:summary].to_s
-          description      = annotations[:description].to_s.presence || summary
 
-          if status == 'resolved'
+          case alert[:status].to_s
+          when 'resolved'
             resolve_incident(affected_service, alert_name)
-            return nil
+            nil
+          when 'firing'
+            open_incident(alert, alert_name, affected_service) if affected_service.present?
           end
-
-          return nil unless status == 'firing'
-          return nil if affected_service.blank?
-
-          # Deduplicate: skip if an active incident for this service already exists
-          existing = Incident.where(affected_service: affected_service)
-                             .where(status: %w[open investigating])
-                             .first
-          if existing
-            Rails.logger.info("Alert #{alert_name} skipped — incident #{existing.id} already open for #{affected_service}")
-            return { skipped: true, incident_id: existing.id, reason: 'duplicate' }
-          end
-
-          auto_investigate = AdminSettingsService.auto_investigate_enabled?
-
-          incident = Incident.create!(
-            title:            summary.presence || "#{alert_name}: #{affected_service} alert firing",
-            description:      build_description(alert_name, description, labels, annotations),
-            severity:         severity,
-            status:           auto_investigate ? 'investigating' : 'open',
-            affected_service: affected_service,
-            reporter_id:      nil, # system-generated
-          )
-
-          session_result = nil
-          if auto_investigate
-            session_result = DevinSessionService.create_session(incident: incident)
-          else
-            Rails.logger.info("Auto-investigate disabled — skipping Devin session for incident #{incident.id}")
-          end
-
-          if session_result
-            incident.update!(
-              devin_session_id:     session_result[:session_id],
-              devin_session_url:    session_result[:url],
-              devin_session_status: 'running',
-            )
-          end
-
-          Rails.logger.info("Incident #{incident.id} created from alert #{alert_name}, devin=#{session_result.present?}")
-
-          { incident_id: incident.id, alert: alert_name, devin_session: session_result.present? }
         rescue ActiveRecord::RecordInvalid => e
           Rails.logger.error("Failed to create incident from alert #{alert_name}: #{e.message}")
           nil
         end
 
+        def open_incident(alert, alert_name, affected_service)
+          # Deduplicate: skip if an active incident for this service already exists
+          existing = active_incident_for(affected_service)
+          if existing
+            Rails.logger.info("Alert #{alert_name} skipped — incident #{existing.id} already open for " \
+                              "#{affected_service}")
+            return { skipped: true, incident_id: existing.id, reason: 'duplicate' }
+          end
+
+          auto_investigate = AdminSettingsService.auto_investigate_enabled?
+          incident = Incident.create!(
+            incident_attributes(alert, alert_name, affected_service, auto_investigate)
+          )
+          session_result = start_devin_session(incident, auto_investigate)
+
+          Rails.logger.info("Incident #{incident.id} created from alert #{alert_name}, " \
+                            "devin=#{session_result.present?}")
+
+          { incident_id: incident.id, alert: alert_name, devin_session: session_result.present? }
+        end
+
+        def incident_attributes(alert, alert_name, affected_service, auto_investigate)
+          labels      = alert[:labels] || {}
+          annotations = alert[:annotations] || {}
+          summary     = annotations[:summary].to_s
+          description = annotations[:description].to_s.presence || summary
+
+          {
+            title: summary.presence || "#{alert_name}: #{affected_service} alert firing",
+            description: build_description(alert_name, description, annotations),
+            severity: SEVERITY_MAP.fetch(labels[:severity].to_s, 'medium'),
+            status: auto_investigate ? 'investigating' : 'open',
+            affected_service: affected_service,
+            reporter_id: nil # system-generated
+          }
+        end
+
+        def start_devin_session(incident, auto_investigate)
+          unless auto_investigate
+            Rails.logger.info("Auto-investigate disabled — skipping Devin session for incident #{incident.id}")
+            return nil
+          end
+
+          session_result = DevinSessionService.create_session(incident: incident)
+          incident.update!(Incident.devin_session_attributes(session_result)) if session_result
+          session_result
+        end
+
+        def active_incident_for(affected_service)
+          Incident.where(affected_service: affected_service)
+                  .where(status: %w[open investigating])
+                  .first
+        end
+
         def resolve_incident(affected_service, alert_name)
           return if affected_service.blank?
 
-          incident = Incident.where(affected_service: affected_service)
-                             .where(status: %w[open investigating])
-                             .first
+          incident = active_incident_for(affected_service)
           return unless incident
 
           incident.resolve!
@@ -116,13 +122,13 @@ module Api
           Rails.logger.warn("Could not auto-resolve incident #{incident.id} for alert #{alert_name}: #{e.message}")
         end
 
-        def build_description(alert_name, base_description, labels, annotations)
+        def build_description(alert_name, base_description, annotations)
           parts = [base_description]
           parts << "**Alert**: #{alert_name}" if alert_name.present?
           if (runbook = annotations[:runbook_url].to_s).present?
             parts << "**Runbook**: #{runbook}"
           end
-          parts << "**Source**: Grafana Unified Alerting (auto-generated incident)"
+          parts << '**Source**: Grafana Unified Alerting (auto-generated incident)'
           parts.join("\n\n")
         end
 

@@ -13,7 +13,7 @@ RSpec.describe Api::V1::Admin::MetricsController do
     it 'returns metrics summary' do
       get :summary
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body).to have_key('users')
       expect(body).to have_key('storage')
       expect(body).to have_key('features')

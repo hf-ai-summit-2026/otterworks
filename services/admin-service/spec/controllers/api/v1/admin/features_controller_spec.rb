@@ -10,13 +10,13 @@ RSpec.describe Api::V1::Admin::FeaturesController do
     it 'returns all feature flags' do
       get :index
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['features'].length).to eq(2)
     end
 
     it 'filters by enabled status' do
       get :index, params: { enabled: 'true' }
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['features'].all? { |f| f['enabled'] }).to be true
     end
   end
@@ -27,7 +27,7 @@ RSpec.describe Api::V1::Admin::FeaturesController do
     it 'returns the feature flag' do
       get :show, params: { id: flag.id }
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['name']).to eq(flag.name)
     end
   end
@@ -46,7 +46,7 @@ RSpec.describe Api::V1::Admin::FeaturesController do
 
     it 'returns errors for invalid params' do
       post :create, params: { feature: { name: 'Invalid Name' } }
-      expect(response).to have_http_status(:unprocessable_entity)
+      expect(response).to have_http_status(:unprocessable_content)
     end
   end
 
@@ -56,7 +56,7 @@ RSpec.describe Api::V1::Admin::FeaturesController do
     it 'updates the feature flag' do
       put :update, params: { id: flag.id, feature: { enabled: true } }
       expect(response).to have_http_status(:ok)
-      body = JSON.parse(response.body)
+      body = response.parsed_body
       expect(body['enabled']).to be true
     end
   end

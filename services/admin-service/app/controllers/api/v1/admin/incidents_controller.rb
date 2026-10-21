@@ -27,12 +27,7 @@ module Api
           # Refresh Devin session status if session exists and incident is active
           if @incident.has_devin_session? && @incident.active?
             session_info = DevinSessionService.get_session(session_id: @incident.devin_session_id)
-            if session_info
-              @incident.update(
-                devin_session_status: session_info[:status],
-                devin_session_url: session_info[:url] || @incident.devin_session_url
-              )
-            end
+            @incident.sync_devin_session(session_info) if session_info
           end
 
           render json: @incident, serializer: IncidentSerializer
@@ -48,26 +43,15 @@ module Api
             # Trigger Devin session
             session_result = DevinSessionService.create_session(incident: incident)
 
-            if session_result
-              incident.update(
-                devin_session_id: session_result[:session_id],
-                devin_session_url: session_result[:url],
-                devin_session_status: 'running'
-              )
-            end
+            incident.update(Incident.devin_session_attributes(session_result)) if session_result
 
-            AuditLogger.log(
-              action: 'incident.created',
-              resource_type: 'Incident',
-              resource_id: incident.id,
-              request: request,
-              changes_made: incident.attributes.merge(devin_session_created: session_result.present?)
-            )
+            audit('incident.created', incident.id,
+                  incident.attributes.merge(devin_session_created: session_result.present?))
 
             render json: incident, serializer: IncidentSerializer, status: :created
           else
             render json: { error: 'Validation failed', details: incident.errors.full_messages },
-                   status: :unprocessable_entity
+                   status: :unprocessable_content
           end
         end
 
@@ -79,32 +63,19 @@ module Api
             return render json: {
               error: 'Invalid status transition',
               details: "Cannot transition from '#{@incident.status}' to '#{new_status}'"
-            }, status: :unprocessable_entity
+            }, status: :unprocessable_content
           end
 
           previous_status = @incident.status
 
-          case new_status
-          when 'resolved'
-            @incident.resolve!
-          when 'closed'
-            @incident.close!
-          when 'investigating'
-            @incident.investigate!
-          end
+          apply_transition!(new_status)
 
-          AuditLogger.log(
-            action: "incident.#{new_status}",
-            resource_type: 'Incident',
-            resource_id: @incident.id,
-            request: request,
-            changes_made: { previous_status: previous_status, new_status: new_status }
-          )
+          audit("incident.#{new_status}", @incident.id, { previous_status: previous_status, new_status: new_status })
 
           render json: @incident, serializer: IncidentSerializer
         rescue Incident::InvalidTransitionError => e
           render json: { error: 'Invalid status transition', details: e.message },
-                 status: :unprocessable_entity
+                 status: :unprocessable_content
         end
 
         # DELETE /api/v1/admin/incidents/:id
@@ -120,13 +91,7 @@ module Api
 
           @incident.destroy!
 
-          AuditLogger.log(
-            action: 'incident.deleted',
-            resource_type: 'Incident',
-            resource_id: incident_attrs['id'],
-            request: request,
-            changes_made: incident_attrs
-          )
+          audit('incident.deleted', incident_attrs['id'], incident_attrs)
 
           head :no_content
         end
@@ -134,17 +99,13 @@ module Api
         # POST /api/v1/admin/incidents/:id/trigger_session
         def trigger_session
           if @incident.devin_session_id.present?
-            return render json: { error: 'Incident already has a Devin session' }, status: :unprocessable_entity
+            return render json: { error: 'Incident already has a Devin session' }, status: :unprocessable_content
           end
 
           session_result = DevinSessionService.create_session(incident: @incident)
 
           if session_result
-            @incident.update(
-              devin_session_id: session_result[:session_id],
-              devin_session_url: session_result[:url],
-              devin_session_status: 'running'
-            )
+            @incident.update(Incident.devin_session_attributes(session_result))
             render json: @incident, serializer: IncidentSerializer
           else
             render json: { error: 'Failed to create Devin session' }, status: :service_unavailable
@@ -152,6 +113,19 @@ module Api
         end
 
         private
+
+        def audit(action, resource_id, changes)
+          AuditLogger.log(action: action, resource_type: 'Incident', resource_id: resource_id,
+                          request: request, changes_made: changes)
+        end
+
+        def apply_transition!(new_status)
+          case new_status
+          when 'resolved' then @incident.resolve!
+          when 'closed' then @incident.close!
+          when 'investigating' then @incident.investigate!
+          end
+        end
 
         def set_incident
           @incident = Incident.find(params[:id]) # nosemgrep: ruby.rails.security.brakeman.check-unscoped-find.check-unscoped-find

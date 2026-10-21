@@ -25,6 +25,7 @@ module AdminService
     config.active_job.queue_adapter = :sidekiq
     config.log_formatter = ::Logger::Formatter.new
     config.time_zone = 'UTC'
+    config.x.jwt_secret = config_for(:jwt)[:secret]
 
     config.middleware.use Rack::Attack
     config.middleware.use JwtAuthenticator

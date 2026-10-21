@@ -32,7 +32,7 @@ module Api
           if result.errors.any? && result.success_count.zero? && result.failure_count.zero?
             :bad_request
           elsif result.success_count.zero? && result.failure_count.positive?
-            :unprocessable_entity
+            :unprocessable_content
           elsif result.failure_count.zero?
             :ok
           else

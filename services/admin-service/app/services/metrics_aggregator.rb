@@ -16,7 +16,7 @@ class MetricsAggregator
       active: AdminUser.active.count,
       suspended: AdminUser.suspended.count,
       by_role: AdminUser.group(:role).count,
-      recent_signups: AdminUser.where('created_at >= ?', 30.days.ago).count
+      recent_signups: AdminUser.where(created_at: 30.days.ago..).count
     }
   end
 
