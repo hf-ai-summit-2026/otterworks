@@ -9,17 +9,25 @@ import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.ArrayList;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 /**
  * Reads a CSV of employees (employeeId,employeeName per line), checks each ID
- * against the cir_emp table, and writes matching IDs to the output file.
+ * against the cir_emp table, and writes matching IDs to the output file in
+ * input order. IDs are looked up in batches to avoid one round trip per line.
  *
  * Usage: java EmployeeLookup <inputFile> <outputFile>
  * Env:   DB_URL, DB_USER, DB_PASSWORD
  */
 public class EmployeeLookup {
 
-    private static final String LOOKUP_SQL = "SELECT emp_id FROM cir_emp WHERE emp_id = ?";
+    // Stays under Oracle's 1000-element IN-list limit.
+    private static final int BATCH_SIZE = 500;
+    private static final int IO_BUFFER_SIZE = 1 << 16;
 
     public static void main(String[] args) {
         if (args.length != 2) {
@@ -42,30 +50,36 @@ public class EmployeeLookup {
         int processed = 0;
         int matched = 0;
 
-        try (BufferedReader reader = Files.newBufferedReader(Paths.get(inputFile), StandardCharsets.UTF_8);
-             BufferedWriter writer = Files.newBufferedWriter(Paths.get(outputFile), StandardCharsets.UTF_8);
+        try (BufferedReader reader = new BufferedReader(
+                     Files.newBufferedReader(Paths.get(inputFile), StandardCharsets.UTF_8), IO_BUFFER_SIZE);
+             BufferedWriter writer = new BufferedWriter(
+                     Files.newBufferedWriter(Paths.get(outputFile), StandardCharsets.UTF_8), IO_BUFFER_SIZE);
              Connection conn = DriverManager.getConnection(dbUrl, dbUser, dbPassword);
-             PreparedStatement stmt = conn.prepareStatement(LOOKUP_SQL)) {
+             PreparedStatement stmt = conn.prepareStatement(buildLookupSql(BATCH_SIZE))) {
+
+            conn.setReadOnly(true);
+            stmt.setFetchSize(BATCH_SIZE);
+
+            List<String> pending = new ArrayList<>(BATCH_SIZE);
+            Set<String> distinct = new LinkedHashSet<>(BATCH_SIZE * 2);
 
             String line;
             while ((line = reader.readLine()) != null) {
-                line = line.trim();
-                if (line.isEmpty()) {
-                    continue;
-                }
-
-                String[] parts = line.split(",", 2);
-                String employeeId = parts[0].trim();
-                if (employeeId.isEmpty()) {
+                String employeeId = parseEmployeeId(line);
+                if (employeeId == null) {
                     continue;
                 }
 
                 processed++;
-                if (employeeExists(stmt, employeeId)) {
-                    writer.write(employeeId);
-                    writer.newLine();
-                    matched++;
+                pending.add(employeeId);
+                distinct.add(employeeId);
+
+                if (distinct.size() == BATCH_SIZE) {
+                    matched += flush(stmt, writer, pending, distinct);
                 }
+            }
+            if (!pending.isEmpty()) {
+                matched += flush(stmt, writer, pending, distinct);
             }
         } catch (IOException e) {
             System.err.println("File error: " + e.getMessage());
@@ -79,10 +93,56 @@ public class EmployeeLookup {
         System.out.println("Matching IDs written to " + outputFile);
     }
 
-    private static boolean employeeExists(PreparedStatement stmt, String employeeId) throws SQLException {
-        stmt.setString(1, employeeId);
-        try (ResultSet rs = stmt.executeQuery()) {
-            return rs.next();
+    private static String buildLookupSql(int placeholders) {
+        StringBuilder sql = new StringBuilder("SELECT emp_id FROM cir_emp WHERE emp_id IN (");
+        for (int i = 0; i < placeholders; i++) {
+            sql.append(i == 0 ? "?" : ",?");
         }
+        return sql.append(')').toString();
+    }
+
+    private static String parseEmployeeId(String line) {
+        int comma = line.indexOf(',');
+        String id = (comma >= 0 ? line.substring(0, comma) : line).trim();
+        return id.isEmpty() ? null : id;
+    }
+
+    private static int flush(PreparedStatement stmt, BufferedWriter writer,
+                             List<String> pending, Set<String> distinct) throws SQLException, IOException {
+        Set<String> existing = findExistingIds(stmt, distinct);
+        int matched = 0;
+        for (String id : pending) {
+            if (existing.contains(id)) {
+                writer.write(id);
+                writer.newLine();
+                matched++;
+            }
+        }
+        pending.clear();
+        distinct.clear();
+        return matched;
+    }
+
+    private static Set<String> findExistingIds(PreparedStatement stmt, Set<String> ids) throws SQLException {
+        String filler = ids.iterator().next();
+        int slot = 1;
+        for (String id : ids) {
+            stmt.setString(slot++, id);
+        }
+        // Pad unused slots with a repeat ID so one fixed-size statement serves the final partial batch.
+        while (slot <= BATCH_SIZE) {
+            stmt.setString(slot++, filler);
+        }
+
+        Set<String> existing = new HashSet<>(ids.size() * 2);
+        try (ResultSet rs = stmt.executeQuery()) {
+            while (rs.next()) {
+                String id = rs.getString(1);
+                if (id != null) {
+                    existing.add(id.trim());
+                }
+            }
+        }
+        return existing;
     }
 }
