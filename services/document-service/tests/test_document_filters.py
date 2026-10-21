@@ -86,3 +86,33 @@ async def test_unfiltered_list_is_unchanged(client: AsyncClient, owner_id: uuid.
 
     assert resp.status_code == 200
     assert resp.json()["total"] == 1
+@pytest.mark.asyncio
+async def test_filter_title_with_quote_is_bound_not_interpolated(
+    client: AsyncClient, owner_id: uuid.UUID
+):
+    await _create(client, owner_id, "Owner's Report")
+    await _create(client, owner_id, "Quarterly Report")
+
+    resp = await client.get("/api/v1/documents/", params={"title": "owner's"})
+
+    assert resp.status_code == 200
+    assert [item["title"] for item in resp.json()["items"]] == ["Owner's Report"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "params",
+    [
+        {"sort": "title; DROP TABLE documents"},
+        {"sort": "title", "direction": "asc; SELECT 1"},
+    ],
+)
+async def test_filter_rejects_non_allowlisted_sort(
+    client: AsyncClient, owner_id: uuid.UUID, params: dict
+):
+    await _create(client, owner_id, "Quarterly Report")
+
+    resp = await client.get("/api/v1/documents/", params={"title": "report", **params})
+
+    assert resp.status_code == 400
+    assert "DROP" not in resp.text and "SELECT" not in resp.text
