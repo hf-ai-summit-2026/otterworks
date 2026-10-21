@@ -327,6 +327,7 @@ services:
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: analytics-service
       S3_DATA_LAKE_BUCKET: otterworks-data-lake
+      SQS_ANALYTICS_QUEUE_URL: http://localstack:4566/000000000000/otterworks-analytics-events
       JWT_SECRET: ${JWT_SECRET:-otterworks-local-dev-jwt-secret-change-me-in-production}
     depends_on:
       localstack:
