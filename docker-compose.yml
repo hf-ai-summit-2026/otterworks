@@ -50,6 +50,8 @@ services:
     build:
       context: ./services/auth-service
       dockerfile: Dockerfile
+      args:
+        MAVEN_MIRROR: ${MAVEN_MIRROR:-}
     container_name: otterworks-auth-service
     ports:
     - 8081:8081
@@ -218,6 +220,8 @@ services:
     build:
       context: ./services/notification-service
       dockerfile: Dockerfile
+      args:
+        MAVEN_MIRROR: ${MAVEN_MIRROR:-}
     container_name: otterworks-notification-service
     ports:
     - 8086:8086
@@ -303,6 +307,8 @@ services:
     build:
       context: ./services/analytics-service
       dockerfile: Dockerfile
+      args:
+        MAVEN_MIRROR: ${MAVEN_MIRROR:-}
     container_name: otterworks-analytics-service
     ports:
     - 8088:8088
@@ -396,6 +402,8 @@ services:
     build:
       context: ./services/report-service
       dockerfile: Dockerfile
+      args:
+        MAVEN_MIRROR: ${MAVEN_MIRROR:-}
     container_name: otterworks-report-service
     ports:
     - 8091:8091

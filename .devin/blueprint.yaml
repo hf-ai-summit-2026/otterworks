@@ -1,6 +1,53 @@
 runs-on: default
 # One-time setup (e.g., install system tools, global CLIs).
 initialize: |
+  # Docker Hub and Maven Central rate-limit (HTTP 429) the shared egress IP Devin VMs use, so
+  # route both through Google's mirrors: images via mirror.gcr.io, JVM deps via MAVEN_MIRROR.
+  sudo python3 - <<'EOF'
+  import json, os
+  p = "/etc/docker/daemon.json"
+  cfg = json.load(open(p)) if os.path.exists(p) else {}
+  cfg["registry-mirrors"] = ["https://mirror.gcr.io"]
+  json.dump(cfg, open(p, "w"), indent=2)
+  EOF
+  sudo systemctl restart docker
+  for i in $(seq 1 30); do docker info >/dev/null 2>&1 && break; sleep 1; done
+  export MAVEN_MIRROR=https://maven-central.storage-download.googleapis.com/maven2/
+  # docker-compose.yml passes MAVEN_MIRROR to the JVM Dockerfiles; keeping the same value at
+  # runtime keeps `make up` on cached layers. MVNW_REPOURL covers legacy-portal's ./mvnw.
+  echo "MAVEN_MIRROR=$MAVEN_MIRROR" >> $ENVRC
+  echo "MVNW_REPOURL=${MAVEN_MIRROR%/}" >> $ENVRC
+  # Host-side Gradle (Android, lab `gradle check`) and Maven builds use the same mirror.
+  mkdir -p ~/.gradle/init.d ~/.m2
+  cat > ~/.gradle/init.d/maven-mirror.gradle <<'EOF'
+  // When MAVEN_MIRROR is set, resolve Maven Central (and plugins) through that mirror instead.
+  // Lets builds run on hosts whose egress IP Maven Central rate-limits; a no-op otherwise.
+  def mirror = System.getenv('MAVEN_MIRROR')
+  if (mirror) {
+    def central = ['https://repo.maven.apache.org/maven2', 'https://repo1.maven.org/maven2']
+    def redirect = { RepositoryHandler repos ->
+      repos.configureEach { repo ->
+        if (repo instanceof MavenArtifactRepository && central.any { repo.url.toString().startsWith(it) }) {
+          repo.url = mirror
+        }
+      }
+    }
+    beforeSettings { settings ->
+      settings.pluginManagement.repositories {
+        maven { url mirror }
+        gradlePluginPortal()
+      }
+      redirect(settings.pluginManagement.repositories)
+      redirect(settings.dependencyResolutionManagement.repositories)
+    }
+    allprojects {
+      redirect(buildscript.repositories)
+      redirect(repositories)
+    }
+  }
+  EOF
+  printf '<settings><mirrors><mirror><id>maven-mirror</id><mirrorOf>central</mirrorOf><url>%s</url></mirror></mirrors></settings>\n' "$MAVEN_MIRROR" > ~/.m2/settings.xml
+
   docker compose -f docker-compose.infra.yml pull
   # Serialized with retries: parallel builds overwhelm Docker's embedded DNS (127.0.0.11)
   # and dependency fetches (e.g. cargo's static.crates.io) intermittently fail to resolve.
@@ -13,8 +60,12 @@ initialize: |
     done
   done
 
-  # Capacitor 8 / AGP require JDK 21.
-  sudo apt-get update && sudo apt-get install -y openjdk-21-jdk-headless
+  # Capacitor 8 / AGP require JDK 21. The JVM labs build on the host with JDK 11 (report-service,
+  # legacy-portal) and JDK 17 + Gradle 8.6 (auth/notification-service), plus Maven.
+  sudo apt-get update && sudo apt-get install -y openjdk-21-jdk-headless openjdk-17-jdk-headless openjdk-11-jdk-headless maven
+  curl -sL -o /tmp/gradle86.zip https://services.gradle.org/distributions/gradle-8.6-bin.zip
+  unzip -q -o /tmp/gradle86.zip -d $HOME/gradle-dist
+  sudo ln -sf $HOME/gradle-dist/gradle-8.6/bin/gradle /usr/local/bin/gradle
   echo "JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64" >> $ENVRC
   sudo usermod -aG kvm "$(whoami)" || true
 
@@ -98,6 +149,8 @@ initialize: |
     [ "$code" != "000" ] && [ "$code" != "502" ] && [ "$code" != "503" ] && break
     sleep 2
   done
+  # auth-service rejects registration passwords under 8 characters, which would leave the snapshot unseeded.
+  [ "${#DRIVE_PASSWORD}" -ge 8 ] || { echo "DRIVE_PASSWORD must be at least 8 characters"; exit 1; }
   python3 -m venv /tmp/retail-seed-venv
   /tmp/retail-seed-venv/bin/pip install -q -r testdata/generated/retail-drive/requirements.txt
   /tmp/retail-seed-venv/bin/python testdata/generated/retail-drive/generate_drive.py \

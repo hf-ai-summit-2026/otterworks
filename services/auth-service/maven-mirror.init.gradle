@@ -1,0 +1,25 @@
+// When MAVEN_MIRROR is set, resolve Maven Central (and plugins) through that mirror instead.
+// Lets builds run on hosts whose egress IP Maven Central rate-limits; a no-op otherwise.
+def mirror = System.getenv('MAVEN_MIRROR')
+if (mirror) {
+  def central = ['https://repo.maven.apache.org/maven2', 'https://repo1.maven.org/maven2']
+  def redirect = { RepositoryHandler repos ->
+    repos.configureEach { repo ->
+      if (repo instanceof MavenArtifactRepository && central.any { repo.url.toString().startsWith(it) }) {
+        repo.url = mirror
+      }
+    }
+  }
+  beforeSettings { settings ->
+    settings.pluginManagement.repositories {
+      maven { url mirror }
+      gradlePluginPortal()
+    }
+    redirect(settings.pluginManagement.repositories)
+    redirect(settings.dependencyResolutionManagement.repositories)
+  }
+  allprojects {
+    redirect(buildscript.repositories)
+    redirect(repositories)
+  }
+}
