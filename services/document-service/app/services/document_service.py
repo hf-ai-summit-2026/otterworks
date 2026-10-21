@@ -7,6 +7,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.document import Comment, Document, DocumentVersion, Template
 from app.schemas.document import (
@@ -105,17 +106,41 @@ class DocumentService:
         result = await self.db.execute(query)
         documents = list(result.scalars().all())
 
-        # TODO: This is slow for large result sets (ETL-445, deferred Q2 2024)
+        recent = await self._recent_versions([doc.id for doc in documents])
         for doc in documents:
-            ver_result = await self.db.execute(
-                select(DocumentVersion)
-                .where(DocumentVersion.document_id == doc.id)
-                .order_by(DocumentVersion.version_number.desc())
-                .limit(5)
-            )
-            doc.recent_versions = list(ver_result.scalars().all())
+            doc.recent_versions = recent.get(doc.id, [])
 
         return documents, total
+
+    async def _recent_versions(
+        self, document_ids: list[UUID], limit: int = 5
+    ) -> dict[UUID, list[DocumentVersion]]:
+        """Fetch the newest ``limit`` versions of every document in one statement."""
+        if not document_ids:
+            return {}
+        ranked = (
+            select(
+                DocumentVersion,
+                func.row_number()
+                .over(
+                    partition_by=DocumentVersion.document_id,
+                    order_by=DocumentVersion.version_number.desc(),
+                )
+                .label("rn"),
+            )
+            .where(DocumentVersion.document_id.in_(document_ids))
+            .subquery()
+        )
+        version = aliased(DocumentVersion, ranked)
+        result = await self.db.execute(
+            select(version)
+            .where(ranked.c.rn <= limit)
+            .order_by(ranked.c.document_id, ranked.c.version_number.desc())
+        )
+        grouped: dict[UUID, list[DocumentVersion]] = {}
+        for row in result.scalars().all():
+            grouped.setdefault(row.document_id, []).append(row)
+        return grouped
 
     async def update(
         self, document_id: UUID, data: DocumentUpdate, updated_by: UUID | None = None
