@@ -376,8 +376,10 @@ services:
       DATABASE_USER: otterworks
       DATABASE_PASSWORD: otterworks_dev
       SECRET_KEY_BASE: dev-secret-key-base-otterworks-change-in-production
-      DEVIN_API_KEY: ${DEVIN_API_KEY:-}
-      DEVIN_ORG_ID: ${DEVIN_ORG_ID:-}
+      # Null values pass these through only when set on the host; `${VAR:-}` would set them to "",
+      # which slips past DevinSessionService's nil check and POSTs to /v3/organizations//sessions (404).
+      DEVIN_API_KEY:
+      DEVIN_ORG_ID:
       ALERT_WEBHOOK_SECRET: ${ALERT_WEBHOOK_SECRET:-demo-alert-secret}
       CHAOS_SECRET: ${CHAOS_SECRET:-}
     depends_on:
