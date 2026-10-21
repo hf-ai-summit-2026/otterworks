@@ -2,13 +2,13 @@
 # re-pin with `make incident-record REASON="..."` -- the reason is kept here
 # so every re-record is auditable in git history.
 recorded:
-  at: '2026-10-21T16:54:33.487971+00:00'
-  git_sha: 62b9d57c573cc9ea404717241d9c251b52b4ea43
-  reason: behavior-preserving DocumentService split; n-plus-one loop moved to document_crud.py
-    unchanged
+  at: '2026-10-21T16:57:59.841465+00:00'
+  git_sha: 0d861c44388da3c21a28cad71d08b753e406d1eb
+  reason: 'ETL-445 N+1 fix landed on this branch by request: batched recent-versions
+    query + 004 listing indexes'
 fingerprints:
   fixture: 3700e8e20a8675622dd7152613bc181b8e66ad441f577e1f6b6f0a9d822e8a26
-  source: 634509024d928853d1ba389f400f29add34b27d0f4c3a4ad1c6c935db19b0a98
+  source: afd45d64bd209eee0ad6e4690d0b61c322d5d52c4d4385c10ebbe3de219d17fe
 scenarios:
   n-plus-one:
     alert: DocumentListLatencyHigh
