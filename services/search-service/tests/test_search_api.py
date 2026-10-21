@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 
 class TestSearchEndpoint:
     """Tests for GET /api/v1/search/."""
@@ -145,6 +147,13 @@ class TestAdvancedSearchEndpoint:
 
         response = client.post("/api/v1/search/advanced", json={})
         assert response.status_code == 200
+
+    @pytest.mark.parametrize("body", [["report"], "report", 42])
+    def test_advanced_search_non_object_body(self, client, body):
+        """A JSON body that is not an object is rejected with 400, not a 500."""
+        response = client.post("/api/v1/search/advanced", json=body)
+        assert response.status_code == 400
+        assert response.get_json() == {"error": "Request body must be a JSON object"}
 
 
 class TestAnalyticsEndpoint:
