@@ -198,6 +198,118 @@ public class AuditServiceTests
     }
 
     [Fact]
+    public async Task GetUserActivityReportAsync_ShouldExcludeEventsOutsidePeriod()
+    {
+        var now = DateTime.UtcNow;
+        var events = new List<AuditEvent>
+        {
+            CreateSampleEvent("recent", timestamp: now.AddDays(-2)),
+            CreateSampleEvent("older", timestamp: now.AddDays(-5)),
+            CreateSampleEvent("outside", timestamp: now.AddDays(-10)),
+        };
+
+        _mockRepository.Setup(r => r.GetAllUserEventsAsync("user-1")).ReturnsAsync(events);
+
+        var report = await _service.GetUserActivityReportAsync("user-1", "7d");
+
+        Assert.Equal(2, report.TotalEvents);
+        Assert.Equal(events[1].Timestamp, report.FirstActivity);
+        Assert.Equal(events[0].Timestamp, report.LastActivity);
+        Assert.DoesNotContain(report.RecentEvents, e => e.Id == "outside");
+    }
+
+    [Fact]
+    public async Task GetUserActivityReportAsync_ShouldReturnTenMostRecentEventsNewestFirst()
+    {
+        var now = DateTime.UtcNow;
+        var events = Enumerable.Range(1, 15)
+            .Select(i => CreateSampleEvent($"e{i}", timestamp: now.AddMinutes(-i)))
+            .ToList();
+
+        _mockRepository.Setup(r => r.GetAllUserEventsAsync("user-1")).ReturnsAsync(events);
+
+        var report = await _service.GetUserActivityReportAsync("user-1", "30d");
+
+        Assert.Equal(15, report.TotalEvents);
+        Assert.Equal(
+            Enumerable.Range(1, 10).Select(i => $"e{i}"),
+            report.RecentEvents.Select(e => e.Id));
+    }
+
+    [Fact]
+    public async Task GetComplianceReportAsync_ShouldFlagUserAboveSuspiciousThreshold()
+    {
+        var events = Enumerable.Range(1, 150)
+            .Select(i => CreateSampleEvent($"heavy-{i}", userId: "heavy-user"))
+            .Concat(Enumerable.Range(1, 10)
+                .Select(i => CreateSampleEvent($"normal-{i}", userId: $"user-{i}")))
+            .ToList();
+
+        _mockRepository
+            .Setup(r => r.GetEventsByDateRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>()))
+            .ReturnsAsync(events);
+
+        var report = await _service.GetComplianceReportAsync("30d");
+
+        var suspicious = Assert.Single(report.SuspiciousActivities);
+        Assert.Equal("heavy-user", suspicious.UserId);
+        Assert.Equal(150, suspicious.EventCount);
+        Assert.Contains("threshold: 100", suspicious.Reason);
+    }
+
+    [Fact]
+    public async Task GetComplianceReportAsync_ShouldNotFlagUserAtMinimumThreshold()
+    {
+        var events = Enumerable.Range(1, 100)
+            .Select(i => CreateSampleEvent($"e{i}", userId: "busy-user"))
+            .Concat(Enumerable.Range(1, 50)
+                .Select(i => CreateSampleEvent($"normal-{i}", userId: $"user-{i}")))
+            .ToList();
+
+        _mockRepository
+            .Setup(r => r.GetEventsByDateRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>()))
+            .ReturnsAsync(events);
+
+        var report = await _service.GetComplianceReportAsync("30d");
+
+        Assert.Empty(report.SuspiciousActivities);
+    }
+
+    [Fact]
+    public async Task GetComplianceReportAsync_WithNoEvents_ShouldReturnEmptyReport()
+    {
+        _mockRepository
+            .Setup(r => r.GetEventsByDateRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>()))
+            .ReturnsAsync(new List<AuditEvent>());
+
+        var report = await _service.GetComplianceReportAsync("30d");
+
+        Assert.Equal(0, report.TotalEvents);
+        Assert.Equal(0, report.UniqueUsers);
+        Assert.Empty(report.SuspiciousActivities);
+    }
+
+    [Theory]
+    [InlineData("24h", 1)]
+    [InlineData("week", 7)]
+    [InlineData("90d", 90)]
+    [InlineData("YEAR", 365)]
+    [InlineData("unknown", 30)]
+    public async Task GetComplianceReportAsync_ShouldQueryDateRangeForPeriod(string period, int expectedDays)
+    {
+        DateTime capturedFrom = default;
+        DateTime capturedTo = default;
+        _mockRepository
+            .Setup(r => r.GetEventsByDateRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>()))
+            .Callback<DateTime, DateTime>((from, to) => { capturedFrom = from; capturedTo = to; })
+            .ReturnsAsync(new List<AuditEvent>());
+
+        await _service.GetComplianceReportAsync(period);
+
+        Assert.Equal(TimeSpan.FromDays(expectedDays), capturedTo - capturedFrom);
+    }
+
+    [Fact]
     public async Task ExportAsync_ShouldDelegateToArchiver()
     {
         var from = DateTime.UtcNow.AddDays(-7);
@@ -246,7 +358,8 @@ public class AuditServiceTests
         string userId = "user-1",
         string action = "create",
         string resourceType = "document",
-        string resourceId = "doc-1")
+        string resourceId = "doc-1",
+        DateTime? timestamp = null)
     {
         return new AuditEvent
         {
@@ -255,7 +368,7 @@ public class AuditServiceTests
             Action = action,
             ResourceType = resourceType,
             ResourceId = resourceId,
-            Timestamp = DateTime.UtcNow,
+            Timestamp = timestamp ?? DateTime.UtcNow,
             IpAddress = "10.0.0.1",
             UserAgent = "TestAgent",
         };
