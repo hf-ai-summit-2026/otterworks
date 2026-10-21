@@ -3,7 +3,7 @@ import { createServer } from 'http';
 import { io as clientIO, Socket as ClientSocket } from 'socket.io-client';
 import jwt from 'jsonwebtoken';
 import * as Y from 'yjs';
-import { CollaborationManager } from '../handlers/collaboration';
+import { CollaborationManager, normalizeHistoryLimit } from '../handlers/collaboration';
 import { DocumentStore } from '../services/document-store';
 import { AwarenessService } from '../services/awareness';
 import { PresenceHandler } from '../handlers/presence';
@@ -372,5 +372,49 @@ describe('CollaborationManager', () => {
       client1.disconnect();
       client2.disconnect();
     });
+  });
+
+  describe('Request History', () => {
+    it.each([
+      [undefined, 19],
+      [5, 4],
+      [0, 19],
+      [-5, 19],
+      [2.5, 19],
+      ['10', 19],
+    ])('should request snapshots with limit %p as range 0..%p', async (limit, end) => {
+      const client = await connectClient(`user-history-${String(limit)}`, 'Alice');
+
+      const historyPromise = new Promise<{ documentId: string; snapshots: unknown[] }>(
+        (resolve) => {
+          client.on('document-history', (data) => resolve(data));
+        },
+      );
+
+      client.emit('request-history', { documentId: 'doc-history-test', limit });
+
+      const history = await historyPromise;
+      expect(history.documentId).toBe('doc-history-test');
+      expect(mockRedis.lrange).toHaveBeenCalledWith(
+        'doc:snapshots:doc-history-test',
+        0,
+        end,
+      );
+
+      client.disconnect();
+    });
+  });
+});
+
+describe('normalizeHistoryLimit', () => {
+  it('should keep positive integer limits', () => {
+    expect(normalizeHistoryLimit(1)).toBe(1);
+    expect(normalizeHistoryLimit(50)).toBe(50);
+  });
+
+  it('should fall back to the default for missing or invalid limits', () => {
+    for (const value of [undefined, null, 0, -1, 1.5, NaN, Infinity, '5', {}]) {
+      expect(normalizeHistoryLimit(value)).toBe(20);
+    }
   });
 });
