@@ -40,6 +40,7 @@ jobs:
       report-service: ${{ steps.changes.outputs.report-service }}
       legacy-portal: ${{ steps.changes.outputs.legacy-portal }}
       api-tests: ${{ steps.changes.outputs.api-tests }}
+      cli: ${{ steps.changes.outputs.cli }}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       - uses: dorny/paths-filter@d1c1ffe0248fe513906c8e24db8ea791d46f8590 # v3
@@ -87,6 +88,8 @@ jobs:
               - 'services/api-gateway/internal/config/**'
               - 'docker-compose*.yml'
               - 'Makefile'
+            cli:
+              - 'clients/cli/**'
 
   # Go - API Gateway
   api-gateway:
@@ -212,6 +215,26 @@ jobs:
           python-version: '3.12'
       - run: pip install -r requirements-dev.txt
       - run: python -m pytest --cov=app
+
+  # Python - OtterWorks CLI
+  cli:
+    needs: detect-changes
+    if: needs.detect-changes.outputs.cli == 'true'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.10', '3.12']
+    defaults:
+      run:
+        working-directory: clients/cli
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: pip install -e '.[dev]' ruff
+      - run: ruff check .
+      - run: pytest -q
 
   # Scala - Analytics Service
   analytics-service:

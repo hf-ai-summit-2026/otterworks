@@ -191,6 +191,9 @@ test-coverage: ## Run tests with coverage for all services
 	@echo "=== Auth Service ===" && cd services/auth-service && ./gradlew test jacocoTestReport || true
 	@echo "=== File Service ===" && cd services/file-service && cargo test 2>&1 | tail -5 || true
 
+cli-test: ## Run the OtterWorks CLI tests
+	cd clients/cli && uv run --extra dev pytest
+
 test-api-flows: ## Run black-box API flow tests against the local API gateway
 	UV_PROJECT_ENVIRONMENT=.venv uv run python -m pytest tests/api
 
