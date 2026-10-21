@@ -143,6 +143,33 @@ public class DynamoDbAuditRepositoryTests
         Assert.Equal(2, result.PageSize);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-5)]
+    public async Task QueryEventsAsync_WithPageBelowOne_ShouldReturnFirstPage(int page)
+    {
+        var items = new List<Dictionary<string, AttributeValue>>
+        {
+            CreateDynamoDbItem("e1", "user-1", "create", "document", "doc-1"),
+            CreateDynamoDbItem("e2", "user-1", "update", "document", "doc-2"),
+            CreateDynamoDbItem("e3", "user-1", "delete", "document", "doc-3"),
+        };
+
+        _mockDynamoDb
+            .Setup(d => d.ScanAsync(It.IsAny<ScanRequest>(), default))
+            .ReturnsAsync(new ScanResponse
+            {
+                Items = items,
+                LastEvaluatedKey = new Dictionary<string, AttributeValue>(),
+            });
+
+        var result = await _repository.QueryEventsAsync("user-1", null, null, null, null, null, page, 2);
+
+        Assert.Equal(3, result.Total);
+        Assert.Equal(2, result.Events.Count);
+        Assert.Equal(1, result.Page);
+    }
+
     [Fact]
     public async Task QueryEventsAsync_WithFilters_ShouldApplyFilterExpression()
     {
