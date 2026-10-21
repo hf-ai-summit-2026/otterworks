@@ -60,7 +60,7 @@ public static class AuditController
         return Results.Created($"/api/v1/audit/events/{response.Id}", response);
     }
 
-    private static async Task<IResult> QueryEvents(
+    public static async Task<IResult> QueryEvents(
         string? user_id,
         string? action,
         string? resource,
@@ -71,7 +71,7 @@ public static class AuditController
         int? size,
         IAuditService auditService)
     {
-        var pageNumber = page ?? 1;
+        var pageNumber = Math.Max(page ?? 1, 1);
         var pageSize = Math.Clamp(size ?? 20, 1, 100);
 
         var result = await auditService.QueryEventsAsync(user_id, action, resource_type, resource, from, to, pageNumber, pageSize);
