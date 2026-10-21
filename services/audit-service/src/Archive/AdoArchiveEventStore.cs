@@ -30,13 +30,7 @@ public abstract class AdoArchiveEventStore : IArchiveEventStore
         {
             await using var connection = CreateConnection();
             await connection.OpenAsync(cancellationToken);
-            await using var command = connection.CreateCommand();
-            command.CommandText = EventsSql; // nosemgrep: csharp.lang.security.sqli.csharp-sqli.csharp-sqli -- constant SQL, docId bound as @docId
-            var parameter = command.CreateParameter();
-            parameter.ParameterName = "@docId";
-            parameter.DbType = DbType.String;
-            parameter.Value = docId;
-            command.Parameters.Add(parameter);
+            await using var command = CreateDocCommand(connection, EventsSql, docId);
 
             var rows = new List<ArchiveEventRow>();
             var anyVersion = false;

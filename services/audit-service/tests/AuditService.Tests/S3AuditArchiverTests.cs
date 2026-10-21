@@ -81,6 +81,30 @@ public class S3AuditArchiverTests
     }
 
     [Fact]
+    public async Task ExportAsync_WithCsvFormat_ShouldQuoteAndEscapeFields()
+    {
+        var from = DateTime.UtcNow.AddDays(-1);
+        var to = DateTime.UtcNow;
+        var timestamp = new DateTime(2026, 1, 2, 3, 4, 5, DateTimeKind.Utc);
+        var events = new List<AuditEvent>
+        {
+            new() { Id = "e1", UserId = "u\"1", Action = "create", ResourceType = "doc", ResourceId = "a,b", Timestamp = timestamp },
+        };
+        string? body = null;
+
+        _mockRepository.Setup(r => r.GetEventsByDateRangeAsync(from, to)).ReturnsAsync(events);
+        _mockS3.Setup(s => s.PutObjectAsync(It.IsAny<PutObjectRequest>(), default))
+            .Callback<PutObjectRequest, CancellationToken>((req, _) => body = req.ContentBody)
+            .ReturnsAsync(new PutObjectResponse());
+
+        await _archiver.ExportAsync(from, to, "CSV");
+
+        var lines = body!.Split(Environment.NewLine, StringSplitOptions.RemoveEmptyEntries);
+        Assert.Equal("Id,Timestamp,UserId,Action,ResourceType,ResourceId,IpAddress,UserAgent", lines[0]);
+        Assert.Equal("\"e1\",\"2026-01-02T03:04:05.0000000Z\",\"u\"\"1\",\"create\",\"doc\",\"a,b\",\"\",\"\"", lines[1]);
+    }
+
+    [Fact]
     public async Task ArchiveOldEventsAsync_WithEvents_ShouldUploadToGlacierAndDelete()
     {
         var olderThan = DateTime.UtcNow.AddDays(-90);

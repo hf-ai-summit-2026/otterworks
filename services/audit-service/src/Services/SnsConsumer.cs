@@ -11,6 +11,11 @@ namespace OtterWorks.AuditService.Services;
 
 public class SnsConsumer : BackgroundService
 {
+    private static readonly JsonSerializerOptions MessageJsonOptions = new()
+    {
+        PropertyNameCaseInsensitive = true,
+    };
+
     private readonly IAmazonSQS _sqsClient;
     private readonly IAuditRepository _repository;
     private readonly AwsSettings _settings;
@@ -100,10 +105,7 @@ public class SnsConsumer : BackgroundService
             var snsMessage = TryParseSnsEnvelope(message.Body);
             var eventBody = snsMessage ?? message.Body;
 
-            var fileEvent = JsonSerializer.Deserialize<FileEventMessage>(eventBody, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-            });
+            var fileEvent = JsonSerializer.Deserialize<FileEventMessage>(eventBody, MessageJsonOptions);
             if (fileEvent?.EventType == "file_shared")
             {
                 var fileShareEvent = new AuditEvent
@@ -126,10 +128,7 @@ public class SnsConsumer : BackgroundService
                 return;
             }
 
-            var auditEvent = JsonSerializer.Deserialize<AuditEventMessage>(eventBody, new JsonSerializerOptions
-            {
-                PropertyNameCaseInsensitive = true,
-            });
+            var auditEvent = JsonSerializer.Deserialize<AuditEventMessage>(eventBody, MessageJsonOptions);
 
             if (auditEvent is null)
             {

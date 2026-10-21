@@ -121,9 +121,7 @@ public class DynamoDbAuditRepository : IAuditRepository
 
         if (to.HasValue)
         {
-            var tsAlias = expressionNames.ContainsKey("#ts") ? "#ts" : "#ts";
-            if (!expressionNames.ContainsKey("#ts"))
-                expressionNames["#ts"] = "Timestamp";
+            expressionNames["#ts"] = "Timestamp";
             filterExpressions.Add("#ts <= :toTs");
             expressionValues[":toTs"] = new AttributeValue { S = to.Value.ToString("O") };
         }
@@ -141,18 +139,7 @@ public class DynamoDbAuditRepository : IAuditRepository
                 scanRequest.ExpressionAttributeNames = expressionNames;
         }
 
-        var allEvents = new List<AuditEvent>();
-        ScanResponse? response = null;
-
-        do
-        {
-            if (response?.LastEvaluatedKey?.Count > 0)
-                scanRequest.ExclusiveStartKey = response.LastEvaluatedKey;
-
-            response = await _dynamoDb.ScanAsync(scanRequest);
-            allEvents.AddRange(response.Items.Select(MapToAuditEvent));
-        }
-        while (response.LastEvaluatedKey?.Count > 0);
+        var allEvents = await ScanAllAsync(scanRequest);
 
         allEvents = allEvents.OrderByDescending(e => e.Timestamp).ToList();
         var total = allEvents.Count;
@@ -184,18 +171,7 @@ public class DynamoDbAuditRepository : IAuditRepository
             },
         };
 
-        var events = new List<AuditEvent>();
-        ScanResponse? response = null;
-
-        do
-        {
-            if (response?.LastEvaluatedKey?.Count > 0)
-                scanRequest.ExclusiveStartKey = response.LastEvaluatedKey;
-
-            response = await _dynamoDb.ScanAsync(scanRequest);
-            events.AddRange(response.Items.Select(MapToAuditEvent));
-        }
-        while (response.LastEvaluatedKey?.Count > 0);
+        var events = await ScanAllAsync(scanRequest);
 
         _logger.LogDebug("Retrieved {Count} events for user {UserId}", events.Count, userId);
         return events.OrderByDescending(e => e.Timestamp).ToList();
@@ -213,18 +189,7 @@ public class DynamoDbAuditRepository : IAuditRepository
             },
         };
 
-        var events = new List<AuditEvent>();
-        ScanResponse? response = null;
-
-        do
-        {
-            if (response?.LastEvaluatedKey?.Count > 0)
-                scanRequest.ExclusiveStartKey = response.LastEvaluatedKey;
-
-            response = await _dynamoDb.ScanAsync(scanRequest);
-            events.AddRange(response.Items.Select(MapToAuditEvent));
-        }
-        while (response.LastEvaluatedKey?.Count > 0);
+        var events = await ScanAllAsync(scanRequest);
 
         _logger.LogDebug("Retrieved {Count} events for resource {ResourceId}", events.Count, resourceId);
         return events.OrderByDescending(e => e.Timestamp).ToList();
@@ -247,18 +212,7 @@ public class DynamoDbAuditRepository : IAuditRepository
             },
         };
 
-        var events = new List<AuditEvent>();
-        ScanResponse? response = null;
-
-        do
-        {
-            if (response?.LastEvaluatedKey?.Count > 0)
-                scanRequest.ExclusiveStartKey = response.LastEvaluatedKey;
-
-            response = await _dynamoDb.ScanAsync(scanRequest);
-            events.AddRange(response.Items.Select(MapToAuditEvent));
-        }
-        while (response.LastEvaluatedKey?.Count > 0);
+        var events = await ScanAllAsync(scanRequest);
 
         return events.OrderByDescending(e => e.Timestamp).ToList();
     }
@@ -318,6 +272,24 @@ public class DynamoDbAuditRepository : IAuditRepository
         var deleted = idList.Count - totalFailed;
         _logger.LogInformation("Deleted {Deleted} of {Total} audit events from DynamoDB", deleted, idList.Count);
         return deleted;
+    }
+
+    private async Task<List<AuditEvent>> ScanAllAsync(ScanRequest scanRequest)
+    {
+        var events = new List<AuditEvent>();
+        ScanResponse? response = null;
+
+        do
+        {
+            if (response?.LastEvaluatedKey?.Count > 0)
+                scanRequest.ExclusiveStartKey = response.LastEvaluatedKey;
+
+            response = await _dynamoDb.ScanAsync(scanRequest);
+            events.AddRange(response.Items.Select(MapToAuditEvent));
+        }
+        while (response.LastEvaluatedKey?.Count > 0);
+
+        return events;
     }
 
     private static AuditEvent MapToAuditEvent(Dictionary<string, AttributeValue> item)
