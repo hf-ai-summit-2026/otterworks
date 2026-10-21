@@ -32,6 +32,13 @@ class TestIndexDocumentEndpoint:
         )
         assert response.status_code == 400
 
+    def test_index_document_non_object_body(self, client, mock_meilisearch_client):
+        """Index with a JSON array body returns 400, not 500."""
+        response = client.post("/api/v1/search/index/document", json=[{"id": "doc-1"}])
+        assert response.status_code == 400
+        assert response.get_json()["error"] == "Request body must be a JSON object"
+        mock_meilisearch_client.index.return_value.add_documents.assert_not_called()
+
     def test_index_document_missing_id(self, client, mock_meilisearch_client):
         """Index document without id returns 400."""
         response = client.post(
@@ -71,6 +78,13 @@ class TestIndexFileEndpoint:
         assert data["status"] == "indexed"
         assert data["id"] == "file-123"
         assert data["type"] == "file"
+
+    def test_index_file_non_object_body(self, client, mock_meilisearch_client):
+        """Index file with a JSON array body returns 400, not 500."""
+        response = client.post("/api/v1/search/index/file", json=["file-1"])
+        assert response.status_code == 400
+        assert response.get_json()["error"] == "Request body must be a JSON object"
+        mock_meilisearch_client.index.return_value.add_documents.assert_not_called()
 
     def test_index_file_missing_name(self, client, mock_meilisearch_client):
         """Index file without name returns 400."""
