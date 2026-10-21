@@ -134,7 +134,9 @@ export class DocumentStore {
 
   async getSnapshots(documentId: string, limit = 20): Promise<DocumentSnapshot[]> {
     const key = `${DOC_SNAPSHOTS_KEY}${documentId}`;
-    const raw = await this.redis.lrange(key, 0, limit - 1);
+    const safeLimit =
+      Number.isInteger(limit) && limit > 0 ? Math.min(limit, this.maxSnapshots) : 20;
+    const raw = await this.redis.lrange(key, 0, safeLimit - 1);
     return raw.map((item) => JSON.parse(item) as DocumentSnapshot);
   }
 
