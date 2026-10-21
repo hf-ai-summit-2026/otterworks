@@ -148,6 +148,52 @@ class MeiliSearchService:
             params["filter"] = " AND ".join(filter_parts)
         return params
 
+    def _search_indices(
+        self,
+        search_term: str,
+        doc_type: str | None,
+        filter_parts: list[str],
+        page: int,
+        page_size: int,
+    ) -> SearchResponse:
+        """Fan a query out across the resolved indices and re-paginate the merged hits.
+
+        With a single index MeiliSearch paginates server-side. With several, each
+        index returns its first ``page * page_size`` hits and the requested page
+        is sliced from the merged list.
+        """
+        indices_to_search = self._resolve_indices(doc_type)
+        multi_index = len(indices_to_search) > 1
+        search_params = self._build_search_params(page, page_size, filter_parts, multi_index)
+
+        all_hits: list[SearchHit] = []
+        total = 0
+
+        for index_name in indices_to_search:
+            index = self.client.index(index_name)
+            try:
+                result = index.search(search_term, search_params)
+            except meilisearch.errors.MeilisearchApiError as exc:
+                logger.warning("search_filter_error", index=index_name, error=str(exc))
+                raise ValueError(f"Invalid search filter: {exc}") from exc
+            total += result["estimatedTotalHits"]
+            for hit in result["hits"]:
+                all_hits.append(self._parse_hit(hit, index_name))
+
+        display_query = search_term or "*"
+        record_search_analytics(display_query, total)
+
+        start = (page - 1) * page_size if multi_index else 0
+        page_hits = all_hits[start : start + page_size]
+
+        return SearchResponse(
+            results=page_hits,
+            total=total,
+            page=page,
+            page_size=page_size,
+            query=display_query,
+        )
+
     def search(
         self,
         query: str,
@@ -163,36 +209,7 @@ class MeiliSearchService:
         if owner_id:
             filter_parts.append(f'owner_id = "{self._escape(owner_id)}"')
 
-        indices_to_search = self._resolve_indices(doc_type)
-        multi_index = len(indices_to_search) > 1
-        search_params = self._build_search_params(page, page_size, filter_parts, multi_index)
-
-        all_hits: list[SearchHit] = []
-        total = 0
-
-        for index_name in indices_to_search:
-            index = self.client.index(index_name)
-            try:
-                result = index.search(query, search_params)
-            except meilisearch.errors.MeilisearchApiError as exc:
-                logger.warning("search_filter_error", index=index_name, error=str(exc))
-                raise ValueError(f"Invalid search filter: {exc}") from exc
-            total += result["estimatedTotalHits"]
-            for hit in result["hits"]:
-                all_hits.append(self._parse_hit(hit, index_name))
-
-        record_search_analytics(query, total)
-
-        start = (page - 1) * page_size if multi_index else 0
-        page_hits = all_hits[start : start + page_size]
-
-        return SearchResponse(
-            results=page_hits,
-            total=total,
-            page=page,
-            page_size=page_size,
-            query=query,
-        )
+        return self._search_indices(query, doc_type, filter_parts, page, page_size)
 
     def advanced_search(
         self,
@@ -219,33 +236,7 @@ class MeiliSearchService:
         if date_to:
             filter_parts.append(f'created_at <= "{self._escape(date_to)}"')
 
-        search_term = query or ""
-        indices_to_search = self._resolve_indices(doc_type)
-        multi_index = len(indices_to_search) > 1
-        search_params = self._build_search_params(page, page_size, filter_parts, multi_index)
-
-        all_hits: list[SearchHit] = []
-        total = 0
-
-        for index_name in indices_to_search:
-            index = self.client.index(index_name)
-            result = index.search(search_term, search_params)
-            total += result["estimatedTotalHits"]
-            for hit in result["hits"]:
-                all_hits.append(self._parse_hit(hit, index_name))
-
-        record_search_analytics(search_term or "*", total)
-
-        start = (page - 1) * page_size if multi_index else 0
-        page_hits = all_hits[start : start + page_size]
-
-        return SearchResponse(
-            results=page_hits,
-            total=total,
-            page=page,
-            page_size=page_size,
-            query=search_term or "*",
-        )
+        return self._search_indices(query or "", doc_type, filter_parts, page, page_size)
 
     def suggest(self, prefix: str, size: int = 10) -> list[str]:
         """Autocomplete suggestions using MeiliSearch prefix matching."""

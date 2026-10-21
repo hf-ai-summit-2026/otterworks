@@ -71,7 +71,7 @@ public static class AuditController
         int? size,
         IAuditService auditService)
     {
-        var pageNumber = page ?? 1;
+        var pageNumber = Math.Max(page ?? 1, 1);
         var pageSize = Math.Clamp(size ?? 20, 1, 100);
 
         var result = await auditService.QueryEventsAsync(user_id, action, resource_type, resource, from, to, pageNumber, pageSize);
@@ -98,9 +98,10 @@ public static class AuditController
 
     private static async Task<IResult> GetResourceHistory(
         string resourceId,
+        int? limit,
         IAuditService auditService)
     {
-        var history = await auditService.GetResourceHistoryAsync(resourceId);
+        var history = await auditService.GetResourceHistoryAsync(resourceId, limit ?? Services.AuditService.DefaultHistoryLimit);
         return Results.Ok(history);
     }
 

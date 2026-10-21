@@ -30,6 +30,9 @@ export interface CollaborationDeps {
   snapshotIntervalMs: number;
 }
 
+/** Max documents written to Redis concurrently by the periodic persist/snapshot passes. */
+export const PERSIST_CONCURRENCY = 10;
+
 export class CollaborationManager {
   private documents: Map<string, Y.Doc> = new Map();
   private documentInitPromises: Map<string, Promise<Y.Doc>> = new Map();
@@ -37,6 +40,8 @@ export class CollaborationManager {
   private deps: CollaborationDeps;
   private persistTimer: NodeJS.Timeout | null = null;
   private snapshotTimer: NodeJS.Timeout | null = null;
+  private persistInFlight = false;
+  private snapshotInFlight = false;
 
   constructor(deps: CollaborationDeps) {
     this.deps = deps;
@@ -517,12 +522,31 @@ export class CollaborationManager {
     return initPromise;
   }
 
-  private startPersistenceLoop(): void {
-    const { documentStore, metrics, logger } = this.deps;
+  /**
+   * Run `op` for every in-memory document, at most PERSIST_CONCURRENCY at a time.
+   * Each document's failure is reported via `onError` without aborting the pass.
+   */
+  private async forEachDocumentBounded(
+    op: (documentId: string, doc: Y.Doc) => Promise<void>,
+    onError: (err: unknown, documentId: string) => void,
+  ): Promise<void> {
+    const entries = [...this.documents];
+    for (let i = 0; i < entries.length; i += PERSIST_CONCURRENCY) {
+      const batch = entries.slice(i, i + PERSIST_CONCURRENCY);
+      const results = await Promise.allSettled(batch.map(([id, doc]) => op(id, doc)));
+      results.forEach((result, idx) => {
+        if (result.status === 'rejected') onError(result.reason, batch[idx][0]);
+      });
+    }
+  }
 
-    this.persistTimer = setInterval(async () => {
-      for (const [documentId, doc] of this.documents) {
-        try {
+  async persistAllDocuments(): Promise<void> {
+    const { documentStore, metrics, logger } = this.deps;
+    if (this.persistInFlight) return;
+    this.persistInFlight = true;
+    try {
+      await this.forEachDocumentBounded(
+        async (documentId, doc) => {
           const state = Y.encodeStateAsUpdate(doc);
           const start = Date.now();
           await documentStore.saveDocumentState(documentId, Buffer.from(state));
@@ -534,23 +558,27 @@ export class CollaborationManager {
             operation: 'periodic_save',
             status: 'success',
           });
-        } catch (err) {
+        },
+        (err, documentId) => {
           logger.error({ err, documentId }, 'periodic_persistence_failed');
           metrics.persistenceOperations.inc({
             operation: 'periodic_save',
             status: 'error',
           });
-        }
-      }
-    }, this.deps.persistIntervalMs);
+        },
+      );
+    } finally {
+      this.persistInFlight = false;
+    }
   }
 
-  private startSnapshotLoop(): void {
+  async snapshotAllDocuments(): Promise<void> {
     const { documentStore, logger } = this.deps;
-
-    this.snapshotTimer = setInterval(async () => {
-      for (const [documentId, doc] of this.documents) {
-        try {
+    if (this.snapshotInFlight) return;
+    this.snapshotInFlight = true;
+    try {
+      await this.forEachDocumentBounded(
+        async (documentId, doc) => {
           const state = Y.encodeStateAsUpdate(doc);
           await documentStore.createSnapshot(
             documentId,
@@ -558,15 +586,39 @@ export class CollaborationManager {
             'system',
             'auto-snapshot',
           );
-        } catch (err) {
+        },
+        (err, documentId) => {
           logger.error({ err, documentId }, 'periodic_snapshot_failed');
-        }
-      }
+        },
+      );
+    } finally {
+      this.snapshotInFlight = false;
+    }
+  }
+
+  private startPersistenceLoop(): void {
+    this.persistTimer = setInterval(() => {
+      void this.persistAllDocuments();
+    }, this.deps.persistIntervalMs);
+  }
+
+  private startSnapshotLoop(): void {
+    this.snapshotTimer = setInterval(() => {
+      void this.snapshotAllDocuments();
     }, this.deps.snapshotIntervalMs);
   }
 }
 
-/** Convenience function matching the original API for backward compatibility */
+/**
+ * Convenience function matching the original API for backward compatibility.
+ *
+ * @deprecated Construct a `CollaborationManager` with a `CollaborationDeps` object and
+ * call `start()` instead; the positional signature cannot grow new options safely.
+ * Migration:
+ *   const manager = new CollaborationManager({ io, documentStore, awareness,
+ *     presenceHandler, metrics, logger, persistIntervalMs, snapshotIntervalMs });
+ *   manager.start();
+ */
 export function setupCollaborationHandlers(
   io: SocketIOServer,
   documentStore: DocumentStore,

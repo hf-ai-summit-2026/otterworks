@@ -32,6 +32,11 @@ public class DynamoDbAuditRepository : IAuditRepository
             ["ResourceType"] = new AttributeValue { S = auditEvent.ResourceType },
             ["ResourceId"] = new AttributeValue { S = auditEvent.ResourceId },
             ["Timestamp"] = new AttributeValue { S = auditEvent.Timestamp.ToString("O") },
+
+            // Key attributes for the user-index / timestamp-index GSIs defined in Terraform.
+            ["user_id"] = new AttributeValue { S = auditEvent.UserId },
+            ["timestamp"] = new AttributeValue { S = auditEvent.Timestamp.ToString("O") },
+            ["date_partition"] = new AttributeValue { S = auditEvent.Timestamp.ToString("yyyy-MM-dd") },
         };
 
         if (auditEvent.IpAddress is not null)
@@ -54,9 +59,21 @@ public class DynamoDbAuditRepository : IAuditRepository
         {
             TableName = _settings.DynamoDbTable,
             Item = item,
+            // Audit records are append-only: never overwrite an existing event.
+            ConditionExpression = "attribute_not_exists(id)",
         };
 
-        await _dynamoDb.PutItemAsync(request);
+        try
+        {
+            await _dynamoDb.PutItemAsync(request);
+        }
+        catch (ConditionalCheckFailedException)
+        {
+            // Redelivered SQS messages reuse their MessageId as the event id; treat as already recorded.
+            _logger.LogWarning("Audit event {Id} already exists; leaving the original record unchanged", auditEvent.Id);
+            return;
+        }
+
         _logger.LogDebug("Saved audit event {Id} to DynamoDB table {Table}", auditEvent.Id, _settings.DynamoDbTable);
     }
 
@@ -156,7 +173,7 @@ public class DynamoDbAuditRepository : IAuditRepository
 
         allEvents = allEvents.OrderByDescending(e => e.Timestamp).ToList();
         var total = allEvents.Count;
-        var paged = allEvents.Skip((page - 1) * pageSize).Take(pageSize).ToList();
+        var paged = allEvents.Skip((Math.Max(page, 1) - 1) * pageSize).Take(pageSize).ToList();
 
         _logger.LogDebug("Queried audit events: userId={UserId}, action={Action}, total={Total}", userId, action, total);
         return new AuditEventPage
@@ -322,7 +339,7 @@ public class DynamoDbAuditRepository : IAuditRepository
 
     private static AuditEvent MapToAuditEvent(Dictionary<string, AttributeValue> item)
     {
-        var auditEvent = new AuditEvent
+        return new AuditEvent
         {
             Id = item.TryGetValue("Id", out var id)
                 ? id.S
@@ -336,15 +353,9 @@ public class DynamoDbAuditRepository : IAuditRepository
                 : DateTime.MinValue,
             IpAddress = item.TryGetValue("IpAddress", out var ip) ? ip.S : null,
             UserAgent = item.TryGetValue("UserAgent", out var ua) ? ua.S : null,
+            Details = item.TryGetValue("Details", out var details) && details.M is not null
+                ? details.M.ToDictionary(kvp => kvp.Key, kvp => kvp.Value.S)
+                : null,
         };
-
-        if (item.TryGetValue("Details", out var details) && details.M is not null)
-        {
-            auditEvent.Details = details.M.ToDictionary(
-                kvp => kvp.Key,
-                kvp => kvp.Value.S);
-        }
-
-        return auditEvent;
     }
 }

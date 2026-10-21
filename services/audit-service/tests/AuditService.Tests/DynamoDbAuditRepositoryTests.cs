@@ -263,4 +263,47 @@ public class DynamoDbAuditRepositoryTests
             ["Timestamp"] = new AttributeValue { S = DateTime.UtcNow.ToString("O") },
         };
     }
+
+    [Fact]
+    public async Task SaveEventAsync_ShouldBeAppendOnlyAndPopulateGsiKeys()
+    {
+        var timestamp = new DateTime(2024, 3, 5, 10, 0, 0, DateTimeKind.Utc);
+        var auditEvent = new AuditEvent
+        {
+            Id = "evt-1",
+            UserId = "user-1",
+            Action = "create",
+            ResourceType = "document",
+            ResourceId = "doc-1",
+            Timestamp = timestamp,
+        };
+
+        _mockDynamoDb
+            .Setup(d => d.PutItemAsync(It.IsAny<PutItemRequest>(), default))
+            .ReturnsAsync(new PutItemResponse());
+
+        await _repository.SaveEventAsync(auditEvent);
+
+        _mockDynamoDb.Verify(d => d.PutItemAsync(It.Is<PutItemRequest>(req =>
+            req.ConditionExpression == "attribute_not_exists(id)" &&
+            req.Item["user_id"].S == "user-1" &&
+            req.Item["timestamp"].S == timestamp.ToString("O") &&
+            req.Item["date_partition"].S == "2024-03-05"),
+            default), Times.Once);
+    }
+
+    [Fact]
+    public async Task SaveEventAsync_WhenEventAlreadyExists_ShouldNotThrowOrOverwrite()
+    {
+        _mockDynamoDb
+            .Setup(d => d.PutItemAsync(It.IsAny<PutItemRequest>(), default))
+            .ThrowsAsync(new ConditionalCheckFailedException("exists"));
+
+        var auditEvent = new AuditEvent { Id = "evt-1", UserId = "user-1", Timestamp = DateTime.UtcNow };
+
+        var ex = await Xunit.Record.ExceptionAsync(() => _repository.SaveEventAsync(auditEvent));
+
+        Assert.Null(ex);
+        _mockDynamoDb.Verify(d => d.PutItemAsync(It.IsAny<PutItemRequest>(), default), Times.Once);
+    }
 }

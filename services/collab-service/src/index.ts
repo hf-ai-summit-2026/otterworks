@@ -13,7 +13,7 @@ import { RedisAdapter } from './services/redis-adapter';
 import { DocumentStore } from './services/document-store';
 import { AwarenessService } from './services/awareness';
 import { PresenceHandler } from './handlers/presence';
-import { setupCollaborationHandlers } from './handlers/collaboration';
+import { CollaborationManager } from './handlers/collaboration';
 
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { setupWSConnection } = require('y-websocket/bin/utils');
@@ -116,16 +116,17 @@ const awareness = new AwarenessService(logger);
 const presenceHandler = new PresenceHandler(awareness, logger);
 
 // Setup collaboration handlers
-const collabManager = setupCollaborationHandlers(
+const collabManager = new CollaborationManager({
   io,
   documentStore,
   awareness,
   presenceHandler,
   metrics,
   logger,
-  config.persistence.intervalMs,
-  config.persistence.snapshotIntervalMs,
-);
+  persistIntervalMs: config.persistence.intervalMs,
+  snapshotIntervalMs: config.persistence.snapshotIntervalMs,
+});
+collabManager.start();
 
 // y-websocket server for TipTap/Yjs collaborative editing
 const wss = new WebSocketServer({ noServer: true });

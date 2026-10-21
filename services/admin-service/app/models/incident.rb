@@ -1,6 +1,7 @@
 class Incident < ApplicationRecord
   SEVERITIES = %w[low medium high critical].freeze
   STATUSES = %w[open investigating resolved closed].freeze
+  ACTIVE_STATUSES = %w[open investigating].freeze
   AFFECTED_SERVICES = %w[
     api-gateway auth-service file-service document-service
     collab-service notification-service search-service
@@ -22,7 +23,21 @@ class Incident < ApplicationRecord
 
   scope :by_status, ->(status) { where(status: status) }
   scope :by_severity, ->(severity) { where(severity: severity) }
-  scope :active, -> { where(status: %w[open investigating]) }
+  scope :active, -> { where(status: ACTIVE_STATUSES) }
+
+  # Creates an incident unless one is already active for the same service.
+  # Returns [incident, created]. Atomic under concurrency: the partial unique
+  # index index_incidents_on_active_affected_service rejects a second active row,
+  # and the losing writer returns the winner's incident.
+  def self.create_unless_active!(attrs)
+    service = attrs.fetch(:affected_service)
+    existing = active.find_by(affected_service: service)
+    return [existing, false] if existing
+
+    [transaction(requires_new: true) { create!(attrs) }, true]
+  rescue ActiveRecord::RecordNotUnique
+    [active.find_by!(affected_service: service), false]
+  end
 
   def investigate!
     transition_to!('investigating')
@@ -41,7 +56,7 @@ class Incident < ApplicationRecord
   end
 
   def active?
-    %w[open investigating].include?(status)
+    ACTIVE_STATUSES.include?(status)
   end
 
   def has_devin_session?
