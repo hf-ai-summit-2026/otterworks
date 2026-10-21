@@ -19,6 +19,8 @@ export interface CommentAnnotation {
   parentId?: string;
 }
 
+type JoinAck = (response: { success: boolean; error?: string }) => void;
+
 export interface CollaborationDeps {
   io: SocketIOServer;
   documentStore: DocumentStore;
@@ -60,7 +62,9 @@ export class CollaborationManager {
       this.registerSocketHandlers(socket);
 
       socket.on('disconnect', (reason) => {
-        this.handleDisconnect(socket, reason);
+        this.runGuarded(socket, 'disconnect', () =>
+          this.handleDisconnect(socket, reason),
+        );
       });
     });
 
@@ -89,22 +93,65 @@ export class CollaborationManager {
   }
 
   private registerSocketHandlers(socket: Socket): void {
-    socket.on('join-document', (data, ack) => this.handleJoinDocument(socket, data, ack));
-    socket.on('leave-document', (data) => this.handleLeaveDocument(socket, data));
-    socket.on('document-update', (data) => this.handleDocumentUpdate(socket, data));
-    socket.on('cursor-update', (data) => this.handleCursorUpdate(socket, data));
-    socket.on('typing-indicator', (data) => this.handleTypingIndicator(socket, data));
-    socket.on('comment-add', (data) => this.handleCommentAdd(socket, data));
-    socket.on('comment-update', (data) => this.handleCommentUpdate(socket, data));
-    socket.on('comment-delete', (data) => this.handleCommentDelete(socket, data));
-    socket.on('request-snapshot', (data) => this.handleRequestSnapshot(socket, data));
-    socket.on('request-history', (data) => this.handleRequestHistory(socket, data));
+    const guard = (event: string, run: () => unknown) =>
+      this.runGuarded(socket, event, run);
+
+    socket.on('join-document', (data, ack) =>
+      guard('join-document', () => this.handleJoinDocument(socket, data, ack)),
+    );
+    socket.on('leave-document', (data) =>
+      guard('leave-document', () => this.handleLeaveDocument(socket, data)),
+    );
+    socket.on('document-update', (data) =>
+      guard('document-update', () => this.handleDocumentUpdate(socket, data)),
+    );
+    socket.on('cursor-update', (data) =>
+      guard('cursor-update', () => this.handleCursorUpdate(socket, data)),
+    );
+    socket.on('typing-indicator', (data) =>
+      guard('typing-indicator', () => this.handleTypingIndicator(socket, data)),
+    );
+    socket.on('comment-add', (data) =>
+      guard('comment-add', () => this.handleCommentAdd(socket, data)),
+    );
+    socket.on('comment-update', (data) =>
+      guard('comment-update', () => this.handleCommentUpdate(socket, data)),
+    );
+    socket.on('comment-delete', (data) =>
+      guard('comment-delete', () => this.handleCommentDelete(socket, data)),
+    );
+    socket.on('request-snapshot', (data) =>
+      guard('request-snapshot', () => this.handleRequestSnapshot(socket, data)),
+    );
+    socket.on('request-history', (data) =>
+      guard('request-history', () => this.handleRequestHistory(socket, data)),
+    );
+  }
+
+  /**
+   * Runs a socket event handler so that a malformed client payload is logged
+   * instead of surfacing as an uncaught exception or unhandled rejection,
+   * either of which would terminate the process.
+   */
+  private runGuarded(socket: Socket, event: string, run: () => unknown): void {
+    const onError = (err: unknown) => {
+      this.deps.logger.error(
+        { err, event, socketId: socket.id },
+        'socket_handler_failed',
+      );
+    };
+    try {
+      const result = run();
+      if (result instanceof Promise) result.catch(onError);
+    } catch (err) {
+      onError(err);
+    }
   }
 
   private async handleJoinDocument(
     socket: Socket,
     data: { documentId: string },
-    ack?: (response: { success: boolean; error?: string }) => void,
+    ack?: JoinAck,
   ): Promise<void> {
     const { documentId } = data;
     const { io, awareness, presenceHandler, metrics, logger } = this.deps;
@@ -124,7 +171,7 @@ export class CollaborationManager {
         });
         presenceHandler.broadcastPresenceUpdate(io, oldDocId);
         if (awareness.getDocumentUserCount(oldDocId) === 0) {
-          this.persistAndCleanupDocument(oldDocId);
+          void this.persistAndCleanupDocument(oldDocId);
         }
         logger.info(
           { oldDocumentId: oldDocId, newDocumentId: documentId, socketId: socket.id },
@@ -199,7 +246,7 @@ export class CollaborationManager {
     // Clean up empty documents from memory
     const userCount = awareness.getDocumentUserCount(trackedDocId);
     if (userCount === 0) {
-      this.persistAndCleanupDocument(trackedDocId);
+      void this.persistAndCleanupDocument(trackedDocId);
     }
 
     logger.info({ documentId: trackedDocId, socketId: socket.id }, 'user_left_document');
@@ -455,7 +502,7 @@ export class CollaborationManager {
       // Clean up empty documents
       const userCount = awareness.getDocumentUserCount(mapping.documentId);
       if (userCount === 0) {
-        this.persistAndCleanupDocument(mapping.documentId);
+        void this.persistAndCleanupDocument(mapping.documentId);
       }
     }
   }
