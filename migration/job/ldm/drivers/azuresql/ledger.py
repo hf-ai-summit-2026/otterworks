@@ -21,7 +21,7 @@ class RunLedger:
             "SELECT manifest_sha256 FROM mig.runs WHERE run_id = ? AND namespace = ?", (run_id, namespace)
         )
         if existing is None:
-            self._db.execute(
+            self._db.exec_sql(
                 "INSERT mig.runs (run_id, namespace, status, purge_enabled, manifest_sha256, job_image) "
                 "VALUES (?, ?, N'RUNNING', ?, ?, ?)",
                 (run_id, namespace, purge_enabled, manifest_sha, job_image),
@@ -30,7 +30,7 @@ class RunLedger:
         return str(existing).strip()
 
     def refresh_run(self, run_id: str, namespace: str, purge_enabled: bool, job_image: str | None) -> None:
-        self._db.execute(
+        self._db.exec_sql(
             "UPDATE mig.runs SET purge_enabled = ?, job_image = COALESCE(?, job_image) "
             "WHERE run_id = ? AND namespace = ?",
             (purge_enabled, job_image, run_id, namespace),
@@ -42,7 +42,7 @@ class RunLedger:
 
     def set_run_status(self, run_id: str, namespace: str, status: str, exit_code: int | None) -> None:
         closes = None if status == "RUNNING" else status == "CLOSED"
-        self._db.execute(
+        self._db.exec_sql(
             "UPDATE mig.runs SET status = ?, exit_code = ?, closes = ?, "
             "finished_at = CASE WHEN ? = N'RUNNING' THEN NULL ELSE SYSUTCDATETIME() END "
             "WHERE run_id = ? AND namespace = ?",
@@ -51,7 +51,7 @@ class RunLedger:
 
     def ensure_ledger(self, run_id: str, namespace: str, tables: Sequence[tuple[str, int, str]]) -> None:
         for name, order, role in tables:
-            self._db.execute(
+            self._db.exec_sql(
                 "IF NOT EXISTS (SELECT 1 FROM mig.run_ledger WHERE run_id = ? AND namespace = ? AND table_name = ?) "
                 "INSERT mig.run_ledger (run_id, namespace, table_name, table_order, table_role) VALUES (?, ?, ?, ?, ?)",
                 (run_id, namespace, name, run_id, namespace, name, order, role),
@@ -80,7 +80,7 @@ class RunLedger:
         if not cols:
             return
         sets = ", ".join(f"{_ident(c)} = ?" for c in cols) + ", updated_at = SYSUTCDATETIME()"
-        self._db.execute(
+        self._db.exec_sql(
             f"UPDATE mig.run_ledger SET {sets} WHERE run_id = ? AND namespace = ? AND table_name = ?",
             (*cols.values(), run_id, namespace, table),
         ).close()  # type: ignore[attr-defined]
@@ -100,7 +100,7 @@ class RunLedger:
         return int(v)  # type: ignore[call-overload]
 
     def stage_log_finish(self, log_id: int, status: str, rows: int | None, message: str | None) -> None:
-        self._db.execute(
+        self._db.exec_sql(
             "UPDATE mig.stage_log SET status = ?, rows_processed = ?, message = ?, finished_at = SYSUTCDATETIME() "
             "WHERE stage_log_id = ?",
             (status, rows, message, log_id),

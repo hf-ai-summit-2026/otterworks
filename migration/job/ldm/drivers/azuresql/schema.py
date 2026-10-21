@@ -20,7 +20,7 @@ class SchemaApplier:
 
     def apply_ddl(self, sql_text: str, file_name: str, sha256_hex: str) -> None:
         self._db.script(sql_text)
-        self._db.execute(
+        self._db.exec_sql(
             "MERGE mig.schema_version AS t USING (SELECT ? AS file_name, ? AS file_sha256) AS s "
             "ON t.file_name = s.file_name "
             "WHEN MATCHED THEN UPDATE SET file_sha256 = s.file_sha256, applied_at = SYSUTCDATETIME() "

@@ -62,7 +62,7 @@ class KeyRangeStore:
                 sets.append("loaded_at = SYSUTCDATETIME()")
         if not sets:
             return
-        self._db.execute(
+        self._db.exec_sql(
             f"UPDATE mig.key_ranges SET {', '.join(sets)} "
             "WHERE run_id = ? AND namespace = ? AND table_name = ? AND range_seq = ?",
             (*params, run_id, namespace, table, range_seq),

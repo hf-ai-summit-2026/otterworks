@@ -78,7 +78,9 @@ class Reconciliation:
         ]
 
     def insert_run_sessions(self, run_id: str, namespace: str, sessions: Sequence[tuple[str, str]]) -> None:
-        self._db.execute("DELETE FROM mig.run_sessions WHERE run_id = ? AND namespace = ?", (run_id, namespace)).close()  # type: ignore[attr-defined]
+        self._db.exec_sql(
+            "DELETE FROM mig.run_sessions WHERE run_id = ? AND namespace = ?", (run_id, namespace)
+        ).close()  # type: ignore[attr-defined]
         self._db.executemany(
             "INSERT mig.run_sessions (run_id, namespace, ordinal, label, url) VALUES (?, ?, ?, ?, ?)",
             [(run_id, namespace, i + 1, label[:128], url[:512]) for i, (label, url) in enumerate(sessions)],

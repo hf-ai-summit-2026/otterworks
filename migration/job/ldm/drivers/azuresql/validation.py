@@ -49,7 +49,7 @@ class ValidationStore:
 
     def write_class_totals(self, run_id: str, namespace: str, rows: Sequence[ClassTotalRow]) -> None:
         for table in {r.table_name for r in rows}:
-            self._db.execute(
+            self._db.exec_sql(
                 "DELETE FROM mig.class_totals WHERE run_id = ? AND namespace = ? AND table_name = ?",
                 (run_id, namespace, table),
             ).close()  # type: ignore[attr-defined]
@@ -95,7 +95,7 @@ class ValidationStore:
         columns = self._shapes.get(table).target_columns
         cols = ", ".join(_ident(c) for c in columns)
         key_match = " AND ".join(f"a.{_ident(k)} = s.{_ident(k)}" for k in key_columns)
-        cur = self._db.execute(
+        cur = self._db.exec_sql(
             f"INSERT arch.{_ident(table)} ({cols}, source_key, row_hash, namespace, migrated_run_id) "
             f"SELECT {', '.join('s.' + _ident(c) for c in columns)}, s.source_key, s.row_hash, s.namespace, s.run_id "
             f"FROM stg.{_ident(table)} s JOIN mig.validation v ON v.run_id = s.run_id AND v.namespace = s.namespace "

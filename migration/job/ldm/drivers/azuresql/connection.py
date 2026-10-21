@@ -75,7 +75,7 @@ class AzureSqlConnection:
     def cursor(self) -> object:
         return self.conn.cursor()  # type: ignore[attr-defined]
 
-    def execute(self, sql: str, params: Sequence[object] = ()) -> object:
+    def exec_sql(self, sql: str, params: Sequence[object] = ()) -> object:
         try:
             cur = self.cursor()
             cur.execute(sql, *params)  # type: ignore[attr-defined]
@@ -84,7 +84,7 @@ class AzureSqlConnection:
             raise TargetError(*parse_odbc_error(e)) from e
 
     def rows(self, sql: str, params: Sequence[object] = ()) -> list[tuple[object, ...]]:
-        cur = self.execute(sql, params)
+        cur = self.exec_sql(sql, params)
         try:
             return [tuple(r) for r in cur.fetchall()]  # type: ignore[attr-defined]
         finally:

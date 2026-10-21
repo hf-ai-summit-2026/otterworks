@@ -26,7 +26,7 @@ class StagingStore:
             "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
         )
         for r in rejects:
-            self._db.execute(
+            self._db.exec_sql(
                 sql,
                 (
                     run_id,
@@ -65,14 +65,14 @@ class StagingStore:
         )
 
     def delete_rejects_range(self, run_id: str, namespace: str, table: str, stage: str, range_seq: int) -> None:
-        self._db.execute(
+        self._db.exec_sql(
             "DELETE FROM mig.rejects WHERE run_id = ? AND namespace = ? AND table_name = ? "
             "AND stage = ? AND range_seq = ?",
             (run_id, namespace, table, stage, range_seq),
         ).close()  # type: ignore[attr-defined]
 
     def delete_staging_range(self, run_id: str, namespace: str, table: str, range_seq: int) -> None:
-        self._db.execute(
+        self._db.exec_sql(
             f"DELETE FROM stg.{_ident(table)} WHERE run_id = ? AND namespace = ? AND range_seq = ?",
             (run_id, namespace, range_seq),
         ).close()  # type: ignore[attr-defined]
@@ -199,6 +199,6 @@ class StagingStore:
 
     def delete_staging_run(self, run_id: str, namespace: str) -> None:
         for table in self._shapes.tables:
-            self._db.execute(
+            self._db.exec_sql(
                 f"DELETE FROM stg.{_ident(table)} WHERE run_id = ? AND namespace = ?", (run_id, namespace)
             ).close()  # type: ignore[attr-defined]
