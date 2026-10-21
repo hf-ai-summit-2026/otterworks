@@ -106,8 +106,16 @@ export class CollaborationManager {
     data: { documentId: string },
     ack?: (response: { success: boolean; error?: string }) => void,
   ): Promise<void> {
-    const { documentId } = data;
+    const documentId = data?.documentId;
     const { io, awareness, presenceHandler, metrics, logger } = this.deps;
+
+    if (typeof documentId !== 'string' || documentId.trim() === '') {
+      logger.warn({ socketId: socket.id }, 'join_document_rejected: invalid documentId');
+      metrics.connectionErrors.inc({ reason: 'invalid_document_id' });
+      if (ack) ack({ success: false, error: 'Invalid documentId' });
+      return;
+    }
+
     const user = extractUserFromSocket(socket);
     const room = `doc:${documentId}`;
 

@@ -172,6 +172,26 @@ describe('CollaborationManager', () => {
       client.disconnect();
     });
 
+    it.each([
+      ['missing', {}],
+      ['empty', { documentId: '' }],
+      ['whitespace-only', { documentId: '   ' }],
+      ['non-string', { documentId: 42 }],
+    ])('should reject join with a %s documentId', async (_label, payload) => {
+      const client = await connectClient('user-join-invalid', 'Mallory');
+
+      const response = await new Promise<{ success: boolean; error?: string }>(
+        (resolve) => {
+          client.emit('join-document', payload, resolve);
+        },
+      );
+
+      expect(response).toEqual({ success: false, error: 'Invalid documentId' });
+      expect(manager.getDocument('undefined')).toBeUndefined();
+      expect(manager.getDocument('')).toBeUndefined();
+      client.disconnect();
+    });
+
     it('should sync document state to joining client', async () => {
       const client = await connectClient('user-sync-1', 'Bob');
 
