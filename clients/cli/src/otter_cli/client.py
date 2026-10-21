@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import os
 import re
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
@@ -252,7 +253,7 @@ class OtterClient:
                 pending.append(folder_id)
         return folders
 
-    def download_to(self, url: str, destination: Path) -> None:
+    def stream_download(self, url: str) -> Iterator[bytes]:
         download_host = os.environ.get("OTTER_DOWNLOAD_HOST")
         if download_host:
             parts = urlsplit(url)
@@ -261,7 +262,10 @@ class OtterClient:
             )
         with self._http.stream("GET", url, timeout=60) as response:
             self._raise_for_status(response)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            with destination.open("wb") as output:
-                for chunk in response.iter_bytes():
-                    output.write(chunk)
+            yield from response.iter_bytes()
+
+    def download_to(self, url: str, destination: Path) -> None:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with destination.open("wb") as output:
+            for chunk in self.stream_download(url):
+                output.write(chunk)

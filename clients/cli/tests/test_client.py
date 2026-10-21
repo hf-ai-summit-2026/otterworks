@@ -113,3 +113,27 @@ def test_credentials_file_is_private_and_round_trips(monkeypatch, tmp_path):
     assert stat.S_IMODE(path.stat().st_mode) == 0o600
     assert load_credentials() == credentials
     assert json.loads(path.read_text())["refresh_token"] == "refresh"
+
+
+def test_stream_download_rewrites_host_and_yields_bytes(monkeypatch):
+    monkeypatch.setenv("OTTER_DOWNLOAD_HOST", "localhost:4566")
+    requests = []
+    payload = b"\x00OtterWorks\xff"
+
+    def handler(request):
+        requests.append(request.url)
+        return httpx.Response(200, content=payload)
+
+    client = OtterClient(transport=httpx.MockTransport(handler))
+    chunks = b"".join(
+        client.stream_download(
+            "http://localstack:4566/bucket/file?X-Amz-Signature=test"
+        )
+    )
+    client.close()
+
+    assert chunks == payload
+    assert requests[0].host == "localhost"
+    assert requests[0].port == 4566
+    assert requests[0].path == "/bucket/file"
+    assert requests[0].query == b"X-Amz-Signature=test"

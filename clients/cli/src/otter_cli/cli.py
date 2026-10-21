@@ -691,6 +691,203 @@ def _search(args: argparse.Namespace, client: OtterClient) -> int:
     return 0
 
 
+def _lookup_user(client: OtterClient, email: str) -> dict[str, Any]:
+    try:
+        user = client.get("/auth/users/lookup", params={"email": email})
+    except ApiError as error:
+        if error.status_code == 404 or (
+            error.status_code == 400 and "user not found" in error.message.lower()
+        ):
+            raise ValueError(f"No OtterWorks user with email {email}") from error
+        raise
+    if not isinstance(user, dict) or not user.get("id"):
+        raise ValueError(f"No OtterWorks user with email {email}")
+    return user
+
+
+def _user_email(
+    client: OtterClient, user_id: str, cache: dict[str, str | None]
+) -> str:
+    if user_id not in cache:
+        try:
+            user = client.get(f"/auth/users/by-id/{user_id}")
+        except (ApiError, httpx.HTTPError):
+            cache[user_id] = None
+        else:
+            email = user.get("email") if isinstance(user, dict) else None
+            cache[user_id] = str(email) if email else None
+    return cache[user_id] or user_id
+
+
+def _resolve_shared_file(
+    path: str, client: OtterClient
+) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+    folders = client.list_folder_tree()
+    files = client.list_all_files()
+    kind, item = _resolve_item(path, folders, files)
+    if kind != "file":
+        raise ValueError(f"{path} is a folder; this command only accepts files")
+    return item, folders
+
+
+def _share(args: argparse.Namespace, client: OtterClient) -> int:
+    file, folders = _resolve_shared_file(args.path, client)
+    user = _lookup_user(client, args.email)
+    owner_id = _owner_id(client)
+    permission = "editor" if args.edit else "viewer"
+    client.post(
+        f"/files/{file['id']}/share",
+        json={
+            "shared_with": user["id"],
+            "permission": permission,
+            "shared_by": owner_id,
+        },
+    )
+    print(
+        f"Shared {file_path(file, folders)} with {user.get('email', args.email)} "
+        f"({permission})"
+    )
+    return 0
+
+
+def _unshare(args: argparse.Namespace, client: OtterClient) -> int:
+    file, folders = _resolve_shared_file(args.path, client)
+    user = _lookup_user(client, args.email)
+    try:
+        client.delete(f"/files/{file['id']}/share/{user['id']}")
+    except ApiError as error:
+        if error.status_code == 404:
+            raise ValueError(
+                f"No share exists for {args.email} on {file_path(file, folders)}"
+            ) from error
+        raise
+    print(f"Stopped sharing {file_path(file, folders)} with {user.get('email', args.email)}")
+    return 0
+
+
+def _shared(args: argparse.Namespace, client: OtterClient) -> int:
+    files = client.list_all_files(endpoint="/files/shared")
+    cache: dict[str, str | None] = {}
+    rows = []
+    for file in files:
+        owner_id = str(file.get("ownerId") or "")
+        owner_email = _user_email(client, owner_id, cache) if owner_id else "-"
+        rows.append(
+            {
+                **file,
+                "ownerEmail": owner_email,
+            }
+        )
+    if args.json:
+        _json(rows)
+    else:
+        _print_table(
+            ["NAME", "SIZE", "MODIFIED", "OWNER", "ID"],
+            [
+                [
+                    file.get("name", ""),
+                    format_size(_size(file)),
+                    _format_time(file.get("updatedAt")),
+                    file["ownerEmail"],
+                    file.get("id", ""),
+                ]
+                for file in rows
+            ],
+        )
+    return 0
+
+
+def _info(args: argparse.Namespace, client: OtterClient) -> int:
+    folders = client.list_folder_tree()
+    files = client.list_all_files()
+    kind, item = _resolve_item(args.path, folders, files)
+    if kind == "folder":
+        path = folder_path(_item_id(kind, item), folders)
+        total = du_rows(_item_id(kind, item), folders, files)[-1]
+        data = {
+            "path": path,
+            "id": _item_id(kind, item),
+            "createdAt": item.get("createdAt"),
+            "fileCount": total["fileCount"],
+            "sizeBytes": total["bytes"],
+        }
+        if args.json:
+            _json(data)
+        else:
+            _print_table(
+                ["FIELD", "VALUE"],
+                [
+                    ["Path", path],
+                    ["ID", data["id"]],
+                    ["Created", _format_time(data["createdAt"])],
+                    ["File count", data["fileCount"]],
+                    [
+                        "Size",
+                        f"{format_size(data['sizeBytes'])} ({data['sizeBytes']:,} bytes)",
+                    ],
+                ],
+            )
+        return 0
+
+    metadata = client.get(f"/files/{_item_id(kind, item)}")
+    shares = []
+    cache: dict[str, str | None] = {}
+    for share in metadata.get("sharedWith", []):
+        resolved = dict(share)
+        user_id = str(share.get("sharedWith") or "")
+        resolved["email"] = _user_email(client, user_id, cache) if user_id else ""
+        shares.append(resolved)
+    data = {**metadata, "path": file_path(item, folders), "sharedWith": shares}
+    if args.json:
+        _json(data)
+        return 0
+    size = _size(metadata)
+    rows = [
+        ["Path", data["path"]],
+        ["ID", data.get("id", "")],
+        ["Size", f"{format_size(size)} ({size:,} bytes)"],
+        ["Type", metadata.get("mimeType", "-")],
+        ["Created", _format_time(metadata.get("createdAt"))],
+        ["Modified", _format_time(metadata.get("updatedAt"))],
+    ]
+    if metadata.get("version") is not None:
+        rows.append(["Version", metadata["version"]])
+    rows.extend(
+        [
+            "Shared with",
+            f"{share['email']} ({share.get('permission', '')})",
+        ]
+        for share in shares
+    )
+    _print_table(["FIELD", "VALUE"], rows)
+    return 0
+
+
+def _cat(args: argparse.Namespace, client: OtterClient) -> int:
+    folders = client.list_folder_tree()
+    files = client.list_all_files()
+    output = sys.stdout.buffer
+    for path in args.paths:
+        try:
+            file_id = str(uuid.UUID(path.strip()))
+        except ValueError:
+            file = resolve_file(path, folders, files)
+            file_id = str(file["id"])
+        else:
+            file = next((item for item in files if str(item.get("id")) == file_id), None)
+            if any(str(folder.get("id")) == file_id for folder in folders):
+                raise ValueError(f"{path} is a folder; cat only accepts files")
+        download = client.get(f"/files/{file_id}/download")
+        url = download.get("url") if isinstance(download, dict) else None
+        if not url:
+            name = file.get("name", path) if file else path
+            raise ValueError(f"Download URL missing for {name}")
+        for chunk in client.stream_download(str(url)):
+            output.write(chunk)
+    output.flush()
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="otter")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -777,6 +974,30 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--type", choices=("file", "document"))
     search.add_argument("--json", action="store_true")
     search.set_defaults(handler=_search)
+
+    share = commands.add_parser("share")
+    share.add_argument("path")
+    share.add_argument("--with", dest="email", required=True)
+    share.add_argument("--edit", action="store_true")
+    share.set_defaults(handler=_share)
+
+    unshare = commands.add_parser("unshare")
+    unshare.add_argument("path")
+    unshare.add_argument("--with", dest="email", required=True)
+    unshare.set_defaults(handler=_unshare)
+
+    shared = commands.add_parser("shared")
+    shared.add_argument("--json", action="store_true")
+    shared.set_defaults(handler=_shared)
+
+    info = commands.add_parser("info")
+    info.add_argument("path")
+    info.add_argument("--json", action="store_true")
+    info.set_defaults(handler=_info)
+
+    cat = commands.add_parser("cat")
+    cat.add_argument("paths", nargs="+")
+    cat.set_defaults(handler=_cat)
     return parser
 
 

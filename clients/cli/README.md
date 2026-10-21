@@ -36,6 +36,14 @@ otter mkdir -p /Finance/Reports/2025/Q1
 otter mv /Finance/Reports/q1.xlsx /Finance/Archive
 otter mv /Finance/Reports/q1.xlsx /Finance/Archive/quarterly.xlsx
 otter rename /Finance/Archive/quarterly.xlsx q1-final.xlsx
+otter share /Finance/Reports/q1.xlsx --with teammate@example.com
+otter share /Finance/Reports/q1.xlsx --with teammate@example.com --edit
+otter unshare /Finance/Reports/q1.xlsx --with teammate@example.com
+otter shared
+otter shared --json
+otter info /Finance/Reports/q1.xlsx
+otter info /Finance --json
+otter cat /Finance/Reports/q1.xlsx
 
 otter upload ./report.pdf --to /Finance/Reports
 otter upload ./quarterly-folder -r --to /Finance
@@ -54,6 +62,9 @@ names are rejected with the matching IDs. `rm` moves files to Trash; it does not
 folders. `mkdir` creates folders and `-p` creates missing parents. `mv` can move files and
 folders into an existing folder, or move and rename a single item to a new path. `rename`
 changes a file or folder name within its current parent.
+`share` and `unshare` manage file access by user email; folders are not shareable.
+`shared` lists files shared with the signed-in user. `info` shows file metadata and shares,
+or recursive totals for a folder. `cat` streams file contents to standard output.
 
 ## Environment
 
