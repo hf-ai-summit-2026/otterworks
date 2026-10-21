@@ -21,10 +21,10 @@ type Route struct {
 
 // RouterConfig holds configuration for the reverse proxy router.
 type RouterConfig struct {
-	Routes         []Route
-	CBManager      *CircuitBreakerManager
-	Logger         zerolog.Logger
-	EnableTracing  bool
+	Routes        []Route
+	CBManager     *CircuitBreakerManager
+	Logger        zerolog.Logger
+	EnableTracing bool
 }
 
 // NewRouter creates a chi router with all service routes mounted.
@@ -32,7 +32,6 @@ func NewRouter(cfg RouterConfig) chi.Router {
 	r := chi.NewRouter()
 
 	for _, route := range cfg.Routes {
-		route := route // capture loop var
 		r.Route(route.Prefix, func(sub chi.Router) {
 			handler := newProxyHandler(route, cfg)
 			sub.HandleFunc("/*", handler)
@@ -40,9 +39,7 @@ func NewRouter(cfg RouterConfig) chi.Router {
 		})
 	}
 	r.NotFound(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusNotFound)
-		json.NewEncoder(w).Encode(map[string]string{
+		writeJSON(w, cfg.Logger, http.StatusNotFound, map[string]string{
 			"error": "route not found",
 		})
 	})
@@ -86,9 +83,7 @@ func newProxyHandler(route Route, cfg RouterConfig) http.HandlerFunc {
 			Str("method", r.Method).
 			Msg("proxy error")
 
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusBadGateway)
-		json.NewEncoder(w).Encode(map[string]string{
+		writeJSON(w, cfg.Logger, http.StatusBadGateway, map[string]string{
 			"error":  "service unavailable",
 			"target": route.Prefix,
 		})
@@ -108,13 +103,21 @@ func newProxyHandler(route Route, cfg RouterConfig) http.HandlerFunc {
 				Str("state", cb.State().String()).
 				Msg("circuit breaker rejected request")
 
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusServiceUnavailable)
-			json.NewEncoder(w).Encode(map[string]string{
+			writeJSON(w, cfg.Logger, http.StatusServiceUnavailable, map[string]string{
 				"error":   "service temporarily unavailable",
 				"service": route.Prefix,
 				"reason":  "circuit breaker open",
 			})
 		}
+	}
+}
+
+// writeJSON writes body as a JSON response with the given status. The status
+// line is already sent when encoding fails, so the error can only be logged.
+func writeJSON(w http.ResponseWriter, logger zerolog.Logger, status int, body map[string]string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(body); err != nil {
+		logger.Error().Err(err).Int("status", status).Msg("failed to write JSON response")
 	}
 }

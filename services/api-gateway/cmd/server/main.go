@@ -180,8 +180,10 @@ func initTracer() func(context.Context) error {
 		),
 	)
 	if err != nil {
-		exporter.Shutdown(ctx)
 		l.Warn().Err(err).Msg("failed to create trace resource")
+		if shutdownErr := exporter.Shutdown(ctx); shutdownErr != nil {
+			l.Warn().Err(shutdownErr).Msg("failed to shutdown OTLP exporter")
+		}
 		return nil
 	}
 
