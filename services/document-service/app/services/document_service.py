@@ -2,11 +2,13 @@
 
 import html as html_mod
 import math
+from collections import defaultdict
 from uuid import UUID
 
 import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from app.models.document import Comment, Document, DocumentVersion, Template
 from app.schemas.document import (
@@ -20,6 +22,8 @@ from app.schemas.document import (
 from app.services.event_publisher import event_publisher
 
 logger = structlog.get_logger()
+
+RECENT_VERSIONS_LIMIT = 5
 
 
 def _word_count(text: str) -> int:
@@ -105,17 +109,39 @@ class DocumentService:
         result = await self.db.execute(query)
         documents = list(result.scalars().all())
 
-        # TODO: This is slow for large result sets (ETL-445, deferred Q2 2024)
-        for doc in documents:
-            ver_result = await self.db.execute(
-                select(DocumentVersion)
-                .where(DocumentVersion.document_id == doc.id)
-                .order_by(DocumentVersion.version_number.desc())
-                .limit(5)
-            )
-            doc.recent_versions = list(ver_result.scalars().all())
-
+        await self._attach_recent_versions(documents)
         return documents, total
+
+    async def _attach_recent_versions(
+        self, documents: list[Document], per_document: int = RECENT_VERSIONS_LIMIT
+    ) -> None:
+        """Load the newest versions for a whole page of documents in one query."""
+        if not documents:
+            return
+        rn = (
+            func.row_number()
+            .over(
+                partition_by=DocumentVersion.document_id,
+                order_by=DocumentVersion.version_number.desc(),
+            )
+            .label("rn")
+        )
+        ranked = (
+            select(DocumentVersion, rn)
+            .where(DocumentVersion.document_id.in_([doc.id for doc in documents]))
+            .subquery()
+        )
+        version = aliased(DocumentVersion, ranked)
+        result = await self.db.execute(
+            select(version)
+            .where(ranked.c.rn <= per_document)
+            .order_by(ranked.c.document_id, ranked.c.version_number.desc())
+        )
+        by_document: dict[UUID, list[DocumentVersion]] = defaultdict(list)
+        for row in result.scalars().all():
+            by_document[row.document_id].append(row)
+        for doc in documents:
+            doc.recent_versions = by_document.get(doc.id, [])
 
     async def update(
         self, document_id: UUID, data: DocumentUpdate, updated_by: UUID | None = None
