@@ -241,6 +241,48 @@ public class AuditServiceTests
             It.Is<DateTime>(d => d < DateTime.UtcNow.AddDays(-89))), Times.Once);
     }
 
+    [Theory]
+    [InlineData(0, 20, 1, 20)]
+    [InlineData(-5, 20, 1, 20)]
+    [InlineData(2, 0, 2, 1)]
+    [InlineData(1, 5000, 1, 100)]
+    public async Task QueryEventsAsync_ShouldClampPagination(int page, int size, int expectedPage, int expectedSize)
+    {
+        _mockRepository
+            .Setup(r => r.QueryEventsAsync(null, null, null, null, null, null, expectedPage, expectedSize))
+            .ReturnsAsync(new AuditEventPage { Page = expectedPage, PageSize = expectedSize });
+
+        var result = await _service.QueryEventsAsync(null, null, null, null, null, null, page, size);
+
+        Assert.Equal(expectedPage, result.Page);
+        Assert.Equal(expectedSize, result.PageSize);
+    }
+
+    [Fact]
+    public async Task GetResourceHistoryAsync_ShouldBoundReturnedEventsButReportTotal()
+    {
+        var events = Enumerable.Range(0, 5).Select(i => CreateSampleEvent($"e{i}", resourceId: "doc-1")).ToList();
+        _mockRepository.Setup(r => r.GetResourceHistoryAsync("doc-1")).ReturnsAsync(events);
+
+        var history = await _service.GetResourceHistoryAsync("doc-1", limit: 2);
+
+        Assert.Equal(5, history.TotalEvents);
+        Assert.Equal(new[] { "e0", "e1" }, history.Events.Select(e => e.Id));
+    }
+
+    [Fact]
+    public async Task GetResourceHistoryAsync_ShouldClampLimitToMax()
+    {
+        var events = Enumerable.Range(0, OtterWorks.AuditService.Services.AuditService.MaxHistoryLimit + 5)
+            .Select(i => CreateSampleEvent($"e{i}", resourceId: "doc-1"))
+            .ToList();
+        _mockRepository.Setup(r => r.GetResourceHistoryAsync("doc-1")).ReturnsAsync(events);
+
+        var history = await _service.GetResourceHistoryAsync("doc-1", limit: int.MaxValue);
+
+        Assert.Equal(OtterWorks.AuditService.Services.AuditService.MaxHistoryLimit, history.Events.Count);
+    }
+
     private static AuditEvent CreateSampleEvent(
         string id = "test-id",
         string userId = "user-1",

@@ -1,16 +1,17 @@
 namespace OtterWorks.AuditService.Services;
 
+/// <summary>An audit record. Init-only: records are immutable once created.</summary>
 public class AuditEvent
 {
-    public string Id { get; set; } = string.Empty;
-    public string UserId { get; set; } = string.Empty;
-    public string Action { get; set; } = string.Empty; // create, read, update, delete, share, login, logout
-    public string ResourceType { get; set; } = string.Empty; // file, document, folder, user, permission
-    public string ResourceId { get; set; } = string.Empty;
-    public Dictionary<string, string>? Details { get; set; }
-    public string? IpAddress { get; set; }
-    public string? UserAgent { get; set; }
-    public DateTime Timestamp { get; set; }
+    public string Id { get; init; } = string.Empty;
+    public string UserId { get; init; } = string.Empty;
+    public string Action { get; init; } = string.Empty; // create, read, update, delete, share, login, logout
+    public string ResourceType { get; init; } = string.Empty; // file, document, folder, user, permission
+    public string ResourceId { get; init; } = string.Empty;
+    public Dictionary<string, string>? Details { get; init; }
+    public string? IpAddress { get; init; }
+    public string? UserAgent { get; init; }
+    public DateTime Timestamp { get; init; }
 }
 
 public class AuditEventPage

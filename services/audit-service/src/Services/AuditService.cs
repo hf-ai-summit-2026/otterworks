@@ -6,6 +6,10 @@ namespace OtterWorks.AuditService.Services;
 
 public class AuditService : IAuditService
 {
+    public const int MaxPageSize = 100;
+    public const int DefaultHistoryLimit = 100;
+    public const int MaxHistoryLimit = 1000;
+
     private readonly IAuditRepository _repository;
     private readonly IAuditArchiver _archiver;
     private readonly AwsSettings _settings;
@@ -55,6 +59,8 @@ public class AuditService : IAuditService
         string? userId, string? action, string? resourceType, string? resourceId,
         DateTime? from, DateTime? to, int page, int pageSize)
     {
+        page = Math.Max(page, 1);
+        pageSize = Math.Clamp(pageSize, 1, MaxPageSize);
         return await _repository.QueryEventsAsync(userId, action, resourceType, resourceId, from, to, page, pageSize);
     }
 
@@ -87,7 +93,7 @@ public class AuditService : IAuditService
         return report;
     }
 
-    public async Task<ResourceHistory> GetResourceHistoryAsync(string resourceId)
+    public async Task<ResourceHistory> GetResourceHistoryAsync(string resourceId, int limit = DefaultHistoryLimit)
     {
         var events = await _repository.GetResourceHistoryAsync(resourceId);
 
@@ -95,7 +101,10 @@ public class AuditService : IAuditService
         {
             ResourceId = resourceId,
             TotalEvents = events.Count,
-            Events = events.Select(AuditEventResponse.FromEntity).ToList(),
+            Events = events
+                .Take(Math.Clamp(limit, 1, MaxHistoryLimit))
+                .Select(AuditEventResponse.FromEntity)
+                .ToList(),
         };
     }
 
