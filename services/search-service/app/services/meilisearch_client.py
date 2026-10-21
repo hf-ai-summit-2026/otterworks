@@ -14,9 +14,6 @@ from app.models.search_result import AnalyticsData, SearchHit, SearchResponse
 
 logger = structlog.get_logger()
 
-FILES_INDEX = "files"
-DOCUMENTS_INDEX = "documents"
-
 # In-memory analytics store
 _analytics_lock = threading.Lock()
 _search_analytics: dict[str, Any] = {
@@ -104,7 +101,9 @@ class MeiliSearchService:
         # Configure files index
         files_index = self.client.index(self.files_index_name)
         files_index.update_searchable_attributes(["name", "tags", "mime_type"])
-        files_index.update_filterable_attributes(["type", "owner_id", "mime_type", "folder_id", "tags", "created_at", "updated_at"])
+        files_index.update_filterable_attributes(
+            ["type", "owner_id", "mime_type", "folder_id", "tags", "created_at", "updated_at"]
+        )
         files_index.update_sortable_attributes(["updated_at", "created_at", "size"])
         files_index.update_ranking_rules([
             "words", "typo", "proximity", "attribute", "sort", "exactness",
@@ -117,7 +116,7 @@ class MeiliSearchService:
         try:
             self.client.health()
             return True
-        except Exception:
+        except Exception:  # noqa: BLE001 - any failure means "not ready"
             return False
 
     def _build_search_params(
@@ -157,41 +156,15 @@ class MeiliSearchService:
         page_size: int = 20,
     ) -> SearchResponse:
         """Full-text search across documents and files."""
-        filter_parts: list[str] = []
-        if doc_type:
-            filter_parts.append(f'type = "{self._escape(doc_type)}"')
-        if owner_id:
-            filter_parts.append(f'owner_id = "{self._escape(owner_id)}"')
-
-        indices_to_search = self._resolve_indices(doc_type)
-        multi_index = len(indices_to_search) > 1
-        search_params = self._build_search_params(page, page_size, filter_parts, multi_index)
-
-        all_hits: list[SearchHit] = []
-        total = 0
-
-        for index_name in indices_to_search:
-            index = self.client.index(index_name)
-            try:
-                result = index.search(query, search_params)
-            except meilisearch.errors.MeilisearchApiError as exc:
-                logger.warning("search_filter_error", index=index_name, error=str(exc))
-                raise ValueError(f"Invalid search filter: {exc}") from exc
-            total += result["estimatedTotalHits"]
-            for hit in result["hits"]:
-                all_hits.append(self._parse_hit(hit, index_name))
-
-        record_search_analytics(query, total)
-
-        start = (page - 1) * page_size if multi_index else 0
-        page_hits = all_hits[start : start + page_size]
-
-        return SearchResponse(
-            results=page_hits,
-            total=total,
+        filter_parts = self._base_filters(doc_type, owner_id)
+        return self._execute_search(
+            search_term=query,
+            doc_type=doc_type,
+            filter_parts=filter_parts,
             page=page,
             page_size=page_size,
-            query=query,
+            analytics_query=query,
+            invalid_filter_as_value_error=True,
         )
 
     def advanced_search(
@@ -206,11 +179,7 @@ class MeiliSearchService:
         page_size: int = 20,
     ) -> SearchResponse:
         """Advanced search with detailed filters."""
-        filter_parts: list[str] = []
-        if doc_type:
-            filter_parts.append(f'type = "{self._escape(doc_type)}"')
-        if owner_id:
-            filter_parts.append(f'owner_id = "{self._escape(owner_id)}"')
+        filter_parts = self._base_filters(doc_type, owner_id)
         if tags:
             tag_filters = [f'tags = "{self._escape(tag)}"' for tag in tags]
             filter_parts.append(f'({" OR ".join(tag_filters)})')
@@ -220,6 +189,39 @@ class MeiliSearchService:
             filter_parts.append(f'created_at <= "{self._escape(date_to)}"')
 
         search_term = query or ""
+        return self._execute_search(
+            search_term=search_term,
+            doc_type=doc_type,
+            filter_parts=filter_parts,
+            page=page,
+            page_size=page_size,
+            analytics_query=search_term or "*",
+        )
+
+    def _base_filters(self, doc_type: str | None, owner_id: str | None) -> list[str]:
+        """Build the type/owner filter clauses shared by all search entry points."""
+        filter_parts: list[str] = []
+        if doc_type:
+            filter_parts.append(f'type = "{self._escape(doc_type)}"')
+        if owner_id:
+            filter_parts.append(f'owner_id = "{self._escape(owner_id)}"')
+        return filter_parts
+
+    def _execute_search(
+        self,
+        search_term: str,
+        doc_type: str | None,
+        filter_parts: list[str],
+        page: int,
+        page_size: int,
+        analytics_query: str,
+        invalid_filter_as_value_error: bool = False,
+    ) -> SearchResponse:
+        """Run a query against the relevant indices and paginate the merged hits.
+
+        When *invalid_filter_as_value_error* is set, MeiliSearch API errors are
+        re-raised as ``ValueError`` so the caller can map them to HTTP 400.
+        """
         indices_to_search = self._resolve_indices(doc_type)
         multi_index = len(indices_to_search) > 1
         search_params = self._build_search_params(page, page_size, filter_parts, multi_index)
@@ -229,12 +231,18 @@ class MeiliSearchService:
 
         for index_name in indices_to_search:
             index = self.client.index(index_name)
-            result = index.search(search_term, search_params)
+            try:
+                result = index.search(search_term, search_params)
+            except meilisearch.errors.MeilisearchApiError as exc:
+                if not invalid_filter_as_value_error:
+                    raise
+                logger.warning("search_filter_error", index=index_name, error=str(exc))
+                raise ValueError(f"Invalid search filter: {exc}") from exc
             total += result["estimatedTotalHits"]
             for hit in result["hits"]:
                 all_hits.append(self._parse_hit(hit, index_name))
 
-        record_search_analytics(search_term or "*", total)
+        record_search_analytics(analytics_query, total)
 
         start = (page - 1) * page_size if multi_index else 0
         page_hits = all_hits[start : start + page_size]
@@ -244,7 +252,7 @@ class MeiliSearchService:
             total=total,
             page=page,
             page_size=page_size,
-            query=search_term or "*",
+            query=analytics_query,
         )
 
     def suggest(self, prefix: str, size: int = 10) -> list[str]:

@@ -108,3 +108,36 @@ class TestReindexEndpoint:
         assert response.status_code == 200
         data = response.get_json()
         assert data["status"] == "reindexed"
+
+
+class TestIndexErrorHandling:
+    """Error mapping for the indexing endpoints."""
+
+    def test_delete_not_found_returns_404(self, client, mock_meilisearch_client):
+        import meilisearch
+
+        response_obj = mock_meilisearch_client.index.return_value
+        err_response = type("R", (), {"status_code": 404, "text": '{"message": "nope"}'})()
+        response_obj.get_document.side_effect = meilisearch.errors.MeilisearchApiError("nope", err_response)
+        response = client.delete("/api/v1/search/index/file/missing")
+        assert response.status_code == 404
+        assert response.get_json()["status"] == "not_found"
+
+    def test_index_document_backend_failure_returns_500(self, client, mock_meilisearch_client):
+        mock_meilisearch_client.index.return_value.add_documents.side_effect = RuntimeError("down")
+        response = client.post("/api/v1/search/index/document", json={"id": "d", "title": "t"})
+        assert response.status_code == 500
+        assert response.get_json() == {"error": "Failed to index document"}
+
+    def test_index_file_backend_failure_returns_500(self, client, mock_meilisearch_client):
+        mock_meilisearch_client.index.return_value.add_documents.side_effect = RuntimeError("down")
+        response = client.post("/api/v1/search/index/file", json={"id": "f", "name": "n"})
+        assert response.status_code == 500
+        assert response.get_json() == {"error": "Failed to index file"}
+
+    def test_reindex_backend_failure_returns_500(self, client, mock_meilisearch_client):
+        mock_meilisearch_client.delete_index.side_effect = None
+        mock_meilisearch_client.index.return_value.update_searchable_attributes.side_effect = RuntimeError("x")
+        response = client.post("/api/v1/search/reindex")
+        assert response.status_code == 500
+        assert response.get_json() == {"error": "Failed to reindex"}

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import requests
@@ -14,6 +15,37 @@ logger = structlog.get_logger()
 DOCUMENT_SERVICE_URL = "http://document-service:8083"
 FILE_SERVICE_URL = "http://file-service:8082"
 FETCH_TIMEOUT = 30
+PAGE_SIZE = 100
+
+
+def _document_from_source(item: dict[str, Any]) -> dict[str, Any]:
+    """Map a document-service listing item to a search index document."""
+    return {
+        "id": item.get("id", ""),
+        "title": item.get("title", ""),
+        "content": item.get("content", ""),
+        "owner_id": item.get("owner_id", ""),
+        "tags": item.get("tags", []),
+        "created_at": item.get("created_at"),
+        "updated_at": item.get("updated_at"),
+        "type": "document",
+    }
+
+
+def _file_from_source(item: dict[str, Any]) -> dict[str, Any]:
+    """Map a file-service listing item (snake_case or camelCase) to a search index document."""
+    return {
+        "id": item.get("id", ""),
+        "name": item.get("name", ""),
+        "mime_type": item.get("mime_type", item.get("mimeType", "")),
+        "owner_id": item.get("owner_id", item.get("ownerId", "")),
+        "folder_id": item.get("folder_id", item.get("folderId", "")),
+        "tags": item.get("tags", []),
+        "size": item.get("size", item.get("size_bytes", item.get("sizeBytes", 0))),
+        "created_at": item.get("created_at", item.get("createdAt")),
+        "updated_at": item.get("updated_at", item.get("updatedAt")),
+        "type": "file",
+    }
 
 
 class Indexer:
@@ -105,76 +137,56 @@ class Indexer:
     @staticmethod
     def _fetch_all_documents() -> list[dict[str, Any]]:
         """Paginate through the document-service to collect all documents."""
-        docs: list[dict[str, Any]] = []
-        page = 1
-        while True:
-            try:
-                resp = requests.get(
-                    f"{DOCUMENT_SERVICE_URL}/api/v1/documents/",
-                    params={"page": page, "page_size": 100},
-                    timeout=FETCH_TIMEOUT,
-                )
-                if resp.status_code != 200:
-                    logger.warning("reindex_document_fetch_failed", status=resp.status_code)
-                    break
-                data = resp.json()
-                items = data.get("documents") or data.get("items") or data.get("data") or []
-                if not items:
-                    break
-                for item in items:
-                    docs.append({
-                        "id": item.get("id", ""),
-                        "title": item.get("title", ""),
-                        "content": item.get("content", ""),
-                        "owner_id": item.get("owner_id", ""),
-                        "tags": item.get("tags", []),
-                        "created_at": item.get("created_at"),
-                        "updated_at": item.get("updated_at"),
-                        "type": "document",
-                    })
-                page += 1
-            except requests.RequestException:
-                logger.exception("reindex_document_fetch_error")
-                break
-        return docs
+        return Indexer._fetch_paginated(
+            url=f"{DOCUMENT_SERVICE_URL}/api/v1/documents/",
+            collection_key="documents",
+            to_index_doc=_document_from_source,
+            log_prefix="reindex_document_fetch",
+        )
 
     @staticmethod
     def _fetch_all_files() -> list[dict[str, Any]]:
         """Paginate through the file-service to collect all file metadata."""
-        files: list[dict[str, Any]] = []
+        return Indexer._fetch_paginated(
+            url=f"{FILE_SERVICE_URL}/api/v1/files",
+            collection_key="files",
+            to_index_doc=_file_from_source,
+            log_prefix="reindex_file_fetch",
+        )
+
+    @staticmethod
+    def _fetch_paginated(
+        url: str,
+        collection_key: str,
+        to_index_doc: Callable[[dict[str, Any]], dict[str, Any]],
+        log_prefix: str,
+    ) -> list[dict[str, Any]]:
+        """Collect every item from a paginated source-of-truth listing endpoint.
+
+        Stops on the first empty page, non-200 response or request error.
+        """
+        collected: list[dict[str, Any]] = []
         page = 1
         while True:
             try:
                 resp = requests.get(
-                    f"{FILE_SERVICE_URL}/api/v1/files",
-                    params={"page": page, "page_size": 100},
+                    url,
+                    params={"page": page, "page_size": PAGE_SIZE},
                     timeout=FETCH_TIMEOUT,
                 )
                 if resp.status_code != 200:
-                    logger.warning("reindex_file_fetch_failed", status=resp.status_code)
+                    logger.warning(f"{log_prefix}_failed", status=resp.status_code)
                     break
                 data = resp.json()
-                items = data.get("files") or data.get("items") or data.get("data") or []
+                items = data.get(collection_key) or data.get("items") or data.get("data") or []
                 if not items:
                     break
-                for item in items:
-                    files.append({
-                        "id": item.get("id", ""),
-                        "name": item.get("name", ""),
-                        "mime_type": item.get("mime_type", item.get("mimeType", "")),
-                        "owner_id": item.get("owner_id", item.get("ownerId", "")),
-                        "folder_id": item.get("folder_id", item.get("folderId", "")),
-                        "tags": item.get("tags", []),
-                        "size": item.get("size", item.get("size_bytes", item.get("sizeBytes", 0))),
-                        "created_at": item.get("created_at", item.get("createdAt")),
-                        "updated_at": item.get("updated_at", item.get("updatedAt")),
-                        "type": "file",
-                    })
+                collected.extend(to_index_doc(item) for item in items)
                 page += 1
             except requests.RequestException:
-                logger.exception("reindex_file_fetch_error")
+                logger.exception(f"{log_prefix}_error")
                 break
-        return files
+        return collected
 
     def process_event(self, event: dict[str, Any]) -> dict[str, Any] | None:
         """Process an SQS event message.

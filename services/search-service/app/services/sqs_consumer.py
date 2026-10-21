@@ -14,6 +14,26 @@ if TYPE_CHECKING:
 
 logger = structlog.get_logger()
 
+# file-service event types that can be mapped to an indexer action.
+# file_shared / file_moved events don't carry file metadata (name, mimeType,
+# sizeBytes) so they can't be indexed and are intentionally absent.
+FILE_EVENT_ACTIONS: dict[str, str] = {
+    "file_uploaded": "index_file",
+    "file_created": "index_file",
+    "file_updated": "index_file",
+    "file_deleted": "delete",
+    "file_trashed": "delete",
+    "file_restored": "index_file",
+}
+
+# snake_case event types (document-service envelope with nested payload).
+EVENT_ACTIONS: dict[str, str] = {
+    "document_created": "index_document",
+    "document_updated": "index_document",
+    "document_deleted": "delete",
+    **FILE_EVENT_ACTIONS,
+}
+
 
 class SQSConsumer:
     """Background thread SQS consumer for search-indexing queue events."""
@@ -98,36 +118,15 @@ class SQSConsumer:
         """
         # Format 1: snake_case with nested payload (document-service)
         if "event_type" in body and "payload" in body:
-            action_map = {
-                "document_created": "index_document",
-                "document_updated": "index_document",
-                "document_deleted": "delete",
-                "file_created": "index_file",
-                "file_uploaded": "index_file",
-                "file_updated": "index_file",
-                "file_deleted": "delete",
-                "file_trashed": "delete",
-                "file_restored": "index_file",
-            }
             return {
-                "action": action_map.get(body["event_type"], body["event_type"]),
+                "action": EVENT_ACTIONS.get(body["event_type"], body["event_type"]),
                 "data": body["payload"],
             }
 
         # Format 2: camelCase flat event from file-service
         if "eventType" in body:
             event_type = body["eventType"]
-            action_map = {
-                "file_uploaded": "index_file",
-                "file_created": "index_file",
-                "file_updated": "index_file",
-                "file_deleted": "delete",
-                "file_trashed": "delete",
-                "file_restored": "index_file",
-            }
-            # file_shared and file_moved events don't carry file metadata
-            # (name, mimeType, sizeBytes) so they can't be indexed — skip them
-            action = action_map.get(event_type)
+            action = FILE_EVENT_ACTIONS.get(event_type)
             if not action:
                 return body
 
