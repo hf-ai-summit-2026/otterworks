@@ -105,17 +105,41 @@ class DocumentService:
         result = await self.db.execute(query)
         documents = list(result.scalars().all())
 
-        # TODO: This is slow for large result sets (ETL-445, deferred Q2 2024)
+        recent = await self._recent_versions([doc.id for doc in documents])
         for doc in documents:
-            ver_result = await self.db.execute(
-                select(DocumentVersion)
-                .where(DocumentVersion.document_id == doc.id)
-                .order_by(DocumentVersion.version_number.desc())
-                .limit(5)
-            )
-            doc.recent_versions = list(ver_result.scalars().all())
+            doc.recent_versions = recent.get(doc.id, [])
 
         return documents, total
+
+    async def _recent_versions(
+        self, document_ids: list[UUID], per_document: int = 5
+    ) -> dict[UUID, list[DocumentVersion]]:
+        """Latest versions for a page of documents in one statement."""
+        if not document_ids:
+            return {}
+        ranked = (
+            select(
+                DocumentVersion.id,
+                func.row_number()
+                .over(
+                    partition_by=DocumentVersion.document_id,
+                    order_by=DocumentVersion.version_number.desc(),
+                )
+                .label("rank"),
+            )
+            .where(DocumentVersion.document_id.in_(document_ids))
+            .subquery()
+        )
+        result = await self.db.execute(
+            select(DocumentVersion)
+            .join(ranked, DocumentVersion.id == ranked.c.id)
+            .where(ranked.c.rank <= per_document)
+            .order_by(DocumentVersion.document_id, DocumentVersion.version_number.desc())
+        )
+        recent: dict[UUID, list[DocumentVersion]] = {}
+        for version in result.scalars().all():
+            recent.setdefault(version.document_id, []).append(version)
+        return recent
 
     async def update(
         self, document_id: UUID, data: DocumentUpdate, updated_by: UUID | None = None
