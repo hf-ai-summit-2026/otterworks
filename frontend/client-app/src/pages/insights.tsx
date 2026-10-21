@@ -38,8 +38,16 @@ export default function InsightsPage() {
 }
 
 function InsightsContent() {
-  const files = useQuery({ queryKey: ["files", "all"], queryFn: () => filesApi.listAll() });
-  const folders = useQuery({ queryKey: ["folders", "tree"], queryFn: () => filesApi.listFolderTree() });
+  const files = useQuery({
+    queryKey: ["files", "all"],
+    queryFn: () => filesApi.listAll(),
+    staleTime: 5 * 60 * 1000,
+  });
+  const folders = useQuery({
+    queryKey: ["folders", "tree"],
+    queryFn: () => filesApi.listFolderTree(),
+    staleTime: 5 * 60 * 1000,
+  });
 
   const insights = useMemo(
     () =>
