@@ -31,6 +31,12 @@ otter find / --name '*.pptx'
 otter find / --larger-than 80K --older-than 30d -l
 otter find / --smaller-than 1.5MB --newer-than 12h --json
 
+otter mkdir /Finance/Reports
+otter mkdir -p /Finance/Reports/2025/Q1
+otter mv /Finance/Reports/q1.xlsx /Finance/Archive
+otter mv /Finance/Reports/q1.xlsx /Finance/Archive/quarterly.xlsx
+otter rename /Finance/Archive/quarterly.xlsx q1-final.xlsx
+
 otter upload ./report.pdf --to /Finance/Reports
 otter upload ./quarterly-folder -r --to /Finance
 otter download /Finance/Reports/report.pdf
@@ -45,7 +51,9 @@ otter search budget --type document --json
 
 Paths use `/` for the drive root, exact folder and file names, or a raw UUID. Ambiguous
 names are rejected with the matching IDs. `rm` moves files to Trash; it does not accept
-folders.
+folders. `mkdir` creates folders and `-p` creates missing parents. `mv` can move files and
+folders into an existing folder, or move and rename a single item to a new path. `rename`
+changes a file or folder name within its current parent.
 
 ## Environment
 

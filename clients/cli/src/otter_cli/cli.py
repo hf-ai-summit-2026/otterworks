@@ -16,10 +16,13 @@ import httpx
 from .client import ApiError, OtterClient, SessionExpiredError
 from .drive import (
     AmbiguousPathError,
+    PathResolutionError,
+    descendant_folder_ids,
     du_rows,
     file_path,
     find_files,
     folder_children,
+    folder_path,
     resolve_file,
     resolve_folder,
     tree_lines,
@@ -62,11 +65,6 @@ def _size(file: dict[str, Any]) -> int:
     return int(file.get("sizeBytes", file.get("size", 0)) or 0)
 
 
-def _safe_identity(value: Any) -> str:
-    identity = str(value or "")
-    return identity if identity and "@" not in identity else "your OtterWorks account"
-
-
 def _entries_for_folder(
     client: OtterClient, path: str
 ) -> tuple[str | None, list[dict[str, Any]], list[dict[str, Any]]]:
@@ -83,8 +81,7 @@ def _login(args: argparse.Namespace, client: OtterClient) -> int:
     password = os.environ.get("OTTER_PASSWORD") or getpass.getpass("Password: ")
     response = client.login(email, password)
     user = response.get("user") or {}
-    identity = _safe_identity(user.get("displayName"))
-    print(f"Logged in as {identity}")
+    print(f"Logged in as {user.get('email') or email}")
     return 0
 
 
@@ -99,7 +96,8 @@ def _whoami(_args: argparse.Namespace, client: OtterClient) -> int:
     _print_table(
         ["FIELD", "VALUE"],
         [
-            ["Name", _safe_identity(profile.get("displayName"))],
+            ["Email", profile.get("email", "")],
+            ["Name", profile.get("displayName", "")],
             ["ID", profile.get("id", "")],
         ],
     )
@@ -242,6 +240,273 @@ def _find_or_create_folder(
     )
     folders.append(created)
     return str(created["id"])
+
+
+def _owner_id(client: OtterClient) -> str:
+    profile = client.get("/auth/profile")
+    owner_id = str(profile.get("id", ""))
+    if not owner_id:
+        raise ValueError("Unable to determine account ID for folder creation")
+    return owner_id
+
+
+def _matching_folders(
+    name: str, parent_id: str | None, folders: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    return [
+        folder
+        for folder in folders
+        if folder.get("name") == name
+        and str(folder.get("parentId") or "") == str(parent_id or "")
+    ]
+
+
+def _matching_files(
+    name: str, parent_id: str | None, files: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    return [
+        file
+        for file in files
+        if not file.get("isTrashed", False)
+        and file.get("name") == name
+        and str(file.get("folderId") or "") == str(parent_id or "")
+    ]
+
+
+def _mkdir(args: argparse.Namespace, client: OtterClient) -> int:
+    folders = client.list_folder_tree()
+    files = client.list_all_files()
+    owner_id: str | None = None
+    for path in args.paths:
+        parts = [part for part in path.strip("/").split("/") if part]
+        if not parts:
+            if args.parents:
+                print("/")
+                continue
+            raise ValueError("Already exists: /")
+
+        parent_id: str | None = None
+        for index, name in enumerate(parts):
+            candidates = _matching_folders(name, parent_id, folders)
+            if len(candidates) > 1:
+                raise AmbiguousPathError(
+                    f"Ambiguous folder name {name!r}; matching IDs: "
+                    + ", ".join(str(folder.get("id")) for folder in candidates)
+                )
+            if candidates:
+                if index == len(parts) - 1 and not args.parents:
+                    raise ValueError(f"Already exists: {path}")
+                parent_id = str(candidates[0]["id"])
+                continue
+            if _matching_files(name, parent_id, files):
+                if index == len(parts) - 1:
+                    raise ValueError(f"Already exists: {path}")
+                raise PathResolutionError(
+                    f"Parent path is a file: /{'/'.join(parts[: index + 1])}"
+                )
+            if index != len(parts) - 1 and not args.parents:
+                raise PathResolutionError(
+                    f"Parent folder not found: /{'/'.join(parts[: index + 1])}"
+                )
+            if owner_id is None:
+                owner_id = _owner_id(client)
+            parent_id = _find_or_create_folder(
+                client, folders, name, parent_id, owner_id
+            )
+        print(folder_path(parent_id, folders))
+    return 0
+
+
+def _resolve_item(
+    path: str, folders: list[dict[str, Any]], files: list[dict[str, Any]]
+) -> tuple[str, dict[str, Any]]:
+    try:
+        file = resolve_file(path, folders, files)
+    except AmbiguousPathError:
+        raise
+    except PathResolutionError as error:
+        file_error = error
+        file = None
+    try:
+        folder_id = resolve_folder(path, folders)
+    except AmbiguousPathError:
+        raise
+    except PathResolutionError:
+        folder_id = None
+    folder = next(
+        (item for item in folders if str(item.get("id")) == folder_id), None
+    )
+    if file and folder:
+        raise AmbiguousPathError(
+            f"Ambiguous path {path!r}; matching IDs: "
+            f"{_item_id('file', file)}, {_item_id('folder', folder)}"
+        )
+    if file:
+        return "file", file
+    if folder:
+        return "folder", folder
+    if path.strip() in ("", "/"):
+        raise ValueError("The root folder cannot be moved")
+    raise file_error
+
+
+def _item_id(kind: str, item: dict[str, Any]) -> str:
+    return str(item.get("id", ""))
+
+
+def _item_name(item: dict[str, Any]) -> str:
+    return str(item.get("name", ""))
+
+
+def _item_parent(kind: str, item: dict[str, Any]) -> str | None:
+    parent = item.get("folderId") if kind == "file" else item.get("parentId")
+    return str(parent) if parent else None
+
+
+def _item_path(
+    kind: str, item: dict[str, Any], folders: list[dict[str, Any]]
+) -> str:
+    return (
+        file_path(item, folders)
+        if kind == "file"
+        else folder_path(_item_id(kind, item), folders)
+    )
+
+
+def _name_collision(
+    name: str,
+    parent_id: str | None,
+    folders: list[dict[str, Any]],
+    files: list[dict[str, Any]],
+    excluded: set[tuple[str, str]],
+) -> bool:
+    return any(
+        ("folder", str(folder.get("id"))) not in excluded
+        and folder.get("name") == name
+        and _item_parent("folder", folder) == parent_id
+        for folder in folders
+    ) or any(
+        ("file", str(file.get("id"))) not in excluded
+        and file.get("name") == name
+        and _item_parent("file", file) == parent_id
+        for file in files
+    )
+
+
+def _destination_for_move(
+    path: str,
+    folders: list[dict[str, Any]],
+    source_count: int,
+) -> tuple[str | None, str | None]:
+    try:
+        return resolve_folder(path, folders), None
+    except AmbiguousPathError:
+        raise
+    except PathResolutionError:
+        if source_count != 1:
+            raise ValueError("Multiple sources require an existing destination folder")
+        parts = [part for part in path.strip("/").split("/") if part]
+        if not parts:
+            raise ValueError(f"Invalid destination: {path}")
+        name = parts[-1]
+        parent_path = "/" + "/".join(parts[:-1]) if len(parts) > 1 else "/"
+        return resolve_folder(parent_path, folders), name
+
+
+def _mv(args: argparse.Namespace, client: OtterClient) -> int:
+    folders = client.list_folder_tree()
+    files = client.list_all_files()
+    sources = [_resolve_item(path, folders, files) for path in args.sources]
+    source_keys = {(kind, _item_id(kind, item)) for kind, item in sources}
+    if len(source_keys) != len(sources):
+        raise ValueError("A source may only be moved once")
+
+    destination_id, rename_to = _destination_for_move(
+        args.destination, folders, len(sources)
+    )
+    descendant_ids = {
+        _item_id(kind, item): descendant_folder_ids(_item_id(kind, item), folders)
+        for kind, item in sources
+        if kind == "folder"
+    }
+    planned_names: set[str] = set()
+    plans: list[tuple[str, dict[str, Any], str, str, str, str]] = []
+    for kind, item in sources:
+        item_id = _item_id(kind, item)
+        current_parent = _item_parent(kind, item)
+        target_name = rename_to or _item_name(item)
+        if kind == "folder" and destination_id in descendant_ids[item_id]:
+            raise ValueError("A folder cannot be moved into itself or its descendants")
+        if kind == "folder" and destination_id is None and current_parent is not None:
+            raise ValueError("Moving folders to / is not supported by the API")
+        if _name_collision(
+            target_name, destination_id, folders, files, source_keys
+        ):
+            raise ValueError(f"Destination already contains an item named {target_name!r}")
+        if target_name in planned_names:
+            raise ValueError(f"Destination already contains an item named {target_name!r}")
+        planned_names.add(target_name)
+        old_path = _item_path(kind, item, folders)
+        parent_path = folder_path(destination_id, folders).rstrip("/")
+        new_path = f"{parent_path}/{target_name}"
+        plans.append((kind, item, target_name, old_path, new_path, item_id))
+
+    for kind, item, target_name, old_path, new_path, item_id in plans:
+        current_parent = _item_parent(kind, item)
+        if kind == "file":
+            if current_parent != destination_id:
+                client.put(
+                    f"/files/{item_id}/move",
+                    json={"folder_id": destination_id},
+                )
+            if target_name != _item_name(item):
+                client.patch(f"/files/{item_id}/rename", json={"name": target_name})
+            item["folderId"] = destination_id
+            item["name"] = target_name
+        else:
+            body: dict[str, Any] = {}
+            if current_parent != destination_id:
+                body["parent_id"] = destination_id
+            if target_name != _item_name(item):
+                body["name"] = target_name
+            if body:
+                updated = client.put(f"/folders/{item_id}", json=body) or {}
+                if destination_id is None and current_parent is not None:
+                    actual_parent = updated.get("parentId", current_parent)
+                    if actual_parent != destination_id:
+                        raise ValueError(
+                            "Moving folders to / is not supported by the API"
+                        )
+            item["parentId"] = destination_id
+            item["name"] = target_name
+        print(f"{old_path} -> {new_path}")
+    return 0
+
+
+def _rename(args: argparse.Namespace, client: OtterClient) -> int:
+    folders = client.list_folder_tree()
+    files = client.list_all_files()
+    kind, item = _resolve_item(args.path, folders, files)
+    name = args.new_name
+    if _name_collision(
+        name,
+        _item_parent(kind, item),
+        folders,
+        files,
+        {(kind, _item_id(kind, item))},
+    ):
+        raise ValueError(f"An item named {name!r} already exists in this folder")
+    old_path = _item_path(kind, item, folders)
+    if name != _item_name(item):
+        if kind == "file":
+            client.patch(
+                f"/files/{_item_id(kind, item)}/rename", json={"name": name}
+            )
+        else:
+            client.put(f"/folders/{_item_id(kind, item)}", json={"name": name})
+    parent_path = folder_path(_item_parent(kind, item), folders).rstrip("/")
+    print(f"{old_path} -> {parent_path}/{name}")
+    return 0
 
 
 def _upload_file(
@@ -469,6 +734,21 @@ def build_parser() -> argparse.ArgumentParser:
     find.add_argument("--json", action="store_true")
     find.set_defaults(handler=_find)
 
+    mkdir = commands.add_parser("mkdir")
+    mkdir.add_argument("paths", nargs="+")
+    mkdir.add_argument("-p", "--parents", action="store_true")
+    mkdir.set_defaults(handler=_mkdir)
+
+    mv = commands.add_parser("mv")
+    mv.add_argument("sources", nargs="+")
+    mv.add_argument("destination")
+    mv.set_defaults(handler=_mv)
+
+    rename = commands.add_parser("rename")
+    rename.add_argument("path")
+    rename.add_argument("new_name")
+    rename.set_defaults(handler=_rename)
+
     upload = commands.add_parser("upload")
     upload.add_argument("local", nargs="+")
     upload.add_argument("--to", default="/")
@@ -515,6 +795,8 @@ def main(argv: list[str] | None = None) -> int:
                 parse_duration(args.newer_than)
         except ValueError as error:
             parser.error(str(error))
+    if args.command == "rename" and (not args.new_name or "/" in args.new_name):
+        parser.error("NEW_NAME must be non-empty and must not contain '/'")
     client: OtterClient | None = None
     try:
         client = OtterClient(api_url=getattr(args, "api_url", None))
