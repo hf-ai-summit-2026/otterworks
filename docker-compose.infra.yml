@@ -233,16 +233,10 @@ services:
     depends_on:
       localstack:
         condition: service_healthy
+    # The fluent-bit image is distroless (no shell, wget or curl), so an exec healthcheck
+    # can never pass; liveness is served on :2020/api/v1/health for external probes.
     healthcheck:
-      test:
-      - CMD
-      - wget
-      - --spider
-      - -q
-      - http://localhost:2020/api/v1/health
-      interval: 10s
-      timeout: 5s
-      retries: 3
+      disable: true
     restart: unless-stopped
     security_opt:
     - no-new-privileges:true
