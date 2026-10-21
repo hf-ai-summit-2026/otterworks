@@ -56,6 +56,14 @@ RSpec.describe Incident do
       expect(incident.status).to eq('resolved')
       expect(incident.resolved_at).to be_present
     end
+
+    it 'resolves an open incident directly' do
+      incident = create(:incident)
+      incident.resolve!
+      incident.reload
+      expect(incident.status).to eq('resolved')
+      expect(incident.resolved_at).to be_present
+    end
   end
 
   describe '#close!' do
