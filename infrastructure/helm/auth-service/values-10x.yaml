@@ -1,0 +1,23 @@
+# Opt-in overlay sizing auth-service for ~10x login/refresh traffic:
+#   SCALE_PROFILE=10x ./scripts/deploy-dev.sh
+# Not applied to tenants: their ResourceQuota (4 CPU requests) cannot hold it.
+#
+# Logins are CPU-bound on BCrypt (cost 12, ~230ms per core), so one pod at a 1 CPU
+# limit serves ~4 logins/s; the HPA adds pods on CPU. Needs metrics-server in the cluster.
+autoscaling:
+  enabled: true
+  minReplicas: 3
+  maxReplicas: 12
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: true
+  maxUnavailable: 1
+
+resources:
+  requests:
+    cpu: 500m
+    memory: 512Mi
+  limits:
+    cpu: 1000m
+    memory: 1024Mi

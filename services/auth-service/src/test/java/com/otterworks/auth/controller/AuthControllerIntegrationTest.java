@@ -194,6 +194,14 @@ class AuthControllerIntegrationTest {
   }
 
   @Test
+  void livez_shouldNotRequireAuthOrDatabase() throws Exception {
+    mockMvc
+        .perform(get("/livez"))
+        .andExpect(status().isOk())
+        .andExpect(jsonPath("$.status").value("alive"));
+  }
+
+  @Test
   void refresh_shouldReturnNewTokens() throws Exception {
     String registerBody =
         """

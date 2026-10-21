@@ -18,6 +18,8 @@ COPY --from=builder /app/build/libs/*.jar app.jar
 RUN useradd -r -u 1001 appuser
 USER appuser
 
+# Size the heap from the container limit (the JVM default is 25%) and fail fast on OOM.
+ENV JAVA_TOOL_OPTIONS="-XX:MaxRAMPercentage=75.0 -XX:+ExitOnOutOfMemoryError"
 EXPOSE 8081
 HEALTHCHECK --interval=15s --timeout=5s CMD curl -f http://localhost:8081/health || exit 1
 ENTRYPOINT ["java", "-jar", "app.jar"]

@@ -10,6 +10,7 @@
 #   ./scripts/deploy-dev.sh --skip-platform    # Skip platform provisioning
 #   ./scripts/deploy-dev.sh --skip-terraform   # Skip all Terraform, just build+deploy
 #   ./scripts/deploy-dev.sh --skip-build       # Reuse existing ECR images (set IMAGE_TAG)
+#   SCALE_PROFILE=10x ./scripts/deploy-dev.sh  # Also apply helm/<service>/values-10x.yaml where present
 # ------------------------------------------------------------------------------
 set -euo pipefail
 
@@ -298,6 +299,9 @@ build_helm_args() {
   if [[ " ${JVM_SERVICES} " == *" ${service} "* ]]; then
     EXTRA_ARGS+=(--set resources.requests.memory=512Mi --set resources.limits.memory=1024Mi --set resources.limits.cpu=1000m)
   fi
+  # Opt-in sizing overlay, e.g. SCALE_PROFILE=10x picks up helm/<service>/values-10x.yaml.
+  local overlay="${REPO_ROOT}/infrastructure/helm/${service}/values-${SCALE_PROFILE:-}.yaml"
+  if [ -n "${SCALE_PROFILE:-}" ] && [ -f "${overlay}" ]; then EXTRA_ARGS+=(-f "${overlay}"); fi
 
   # Frontends are reached through the shared ingress controller. They must never
   # be LoadBalancer Services: each one would mint a Classic ELB that Terraform

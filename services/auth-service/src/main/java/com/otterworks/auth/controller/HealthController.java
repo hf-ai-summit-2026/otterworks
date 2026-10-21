@@ -21,6 +21,12 @@ public class HealthController {
     this.dataSource = dataSource;
   }
 
+  /** Liveness: process is up. Deliberately DB-free so a slow database never restarts pods. */
+  @GetMapping("/livez")
+  public ResponseEntity<Map<String, Object>> liveness() {
+    return ResponseEntity.ok(Map.of("service", "auth-service", "status", "alive"));
+  }
+
   @GetMapping("/health")
   public ResponseEntity<Map<String, Object>> health() {
     Map<String, Object> response = new LinkedHashMap<>();
