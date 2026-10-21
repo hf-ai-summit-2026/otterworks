@@ -132,6 +132,21 @@ public class AuditServiceTests
         Assert.Equal(1, result.Page);
     }
 
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-3)]
+    public async Task QueryEventsAsync_WhenPageIsNotPositive_ShouldRequestFirstPage(int requestedPage)
+    {
+        _mockRepository
+            .Setup(r => r.QueryEventsAsync(null, null, null, null, null, null, 1, 20))
+            .ReturnsAsync(new AuditEventPage { Events = new List<AuditEvent>(), Total = 0, Page = 1, PageSize = 20 });
+
+        var result = await _service.QueryEventsAsync(null, null, null, null, null, null, requestedPage, 20);
+
+        Assert.Equal(1, result.Page);
+        _mockRepository.Verify(r => r.QueryEventsAsync(null, null, null, null, null, null, 1, 20), Times.Once);
+    }
+
     [Fact]
     public async Task GetUserActivityReportAsync_ShouldBuildCorrectReport()
     {
