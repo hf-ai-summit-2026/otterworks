@@ -7,7 +7,7 @@ from uuid import UUID
 import structlog
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import aliased
+from sqlalchemy.orm import aliased, defer, raiseload
 
 from app.models.document import Comment, Document, DocumentVersion, Template
 from app.schemas.document import (
@@ -101,7 +101,11 @@ class DocumentService:
         count_q = select(func.count()).select_from(base.subquery())
         total = (await self.db.execute(count_q)).scalar_one()
 
-        query = base.order_by(Document.updated_at.desc())
+        # The listing response carries neither versions nor comments; skip the
+        # selectin loads, which would pull every version body of every row.
+        query = base.options(
+            raiseload(Document.versions), raiseload(Document.comments)
+        ).order_by(Document.updated_at.desc())
         query = query.offset((page - 1) * size).limit(size)
         result = await self.db.execute(query)
         documents = list(result.scalars().all())
@@ -115,7 +119,7 @@ class DocumentService:
     async def _recent_versions(
         self, document_ids: list[UUID], limit: int = 5
     ) -> dict[UUID, list[DocumentVersion]]:
-        """Fetch the newest ``limit`` versions of every document in one statement."""
+        """Fetch each document's newest ``limit`` versions, bodies deferred, in one statement."""
         if not document_ids:
             return {}
         ranked = (
@@ -134,6 +138,7 @@ class DocumentService:
         version = aliased(DocumentVersion, ranked)
         result = await self.db.execute(
             select(version)
+            .options(defer(version.content, raiseload=True))
             .where(ranked.c.rn <= limit)
             .order_by(ranked.c.document_id, ranked.c.version_number.desc())
         )
