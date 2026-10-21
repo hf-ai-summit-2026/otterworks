@@ -146,6 +146,19 @@ class TestAdvancedSearchEndpoint:
         response = client.post("/api/v1/search/advanced", json={})
         assert response.status_code == 200
 
+    def test_advanced_search_non_object_body_returns_400(self, client, mock_meilisearch_client):
+        """A JSON body that is not an object is rejected instead of crashing."""
+        response = client.post("/api/v1/search/advanced", json=["report"])
+        assert response.status_code == 400
+        mock_meilisearch_client.index.return_value.search.assert_not_called()
+
+    def test_advanced_search_string_tags_returns_400(self, client, mock_meilisearch_client):
+        """A bare string for tags is rejected rather than split into per-character filters."""
+        response = client.post("/api/v1/search/advanced", json={"q": "report", "tags": "finance"})
+        assert response.status_code == 400
+        assert "tags" in response.get_json()["error"]
+        mock_meilisearch_client.index.return_value.search.assert_not_called()
+
 
 class TestAnalyticsEndpoint:
     """Tests for GET /api/v1/search/analytics."""
