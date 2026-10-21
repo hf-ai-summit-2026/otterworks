@@ -5,6 +5,7 @@ from __future__ import annotations
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from app.config import MeiliSearchConfig
 from app.services.indexer import Indexer
@@ -122,3 +123,118 @@ class TestIndexer:
     def test_process_event_unknown_action(self, indexer: Indexer):
         result = indexer.process_event({"action": "unknown", "data": {}})
         assert result is None
+
+
+def _response(status_code: int, body: dict | None = None) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = status_code
+    resp.json.return_value = body or {}
+    return resp
+
+
+class TestReindexFetch:
+    """Tests for the source-of-truth crawlers used by reindex."""
+
+    @patch("app.services.indexer.requests.get")
+    def test_fetch_all_documents_paginates_until_empty_page(self, mock_get: MagicMock):
+        mock_get.side_effect = [
+            _response(200, {"documents": [{"id": "d1", "title": "One"}]}),
+            _response(200, {"items": [{"id": "d2", "title": "Two", "tags": ["x"]}]}),
+            _response(200, {"documents": []}),
+        ]
+
+        docs = Indexer._fetch_all_documents()
+
+        assert [d["id"] for d in docs] == ["d1", "d2"]
+        assert docs[1]["tags"] == ["x"]
+        assert all(d["type"] == "document" for d in docs)
+        assert docs[0]["content"] == ""
+        pages = [call.kwargs["params"]["page"] for call in mock_get.call_args_list]
+        assert pages == [1, 2, 3]
+
+    @patch("app.services.indexer.requests.get")
+    def test_fetch_all_documents_stops_on_non_200(self, mock_get: MagicMock):
+        mock_get.side_effect = [
+            _response(200, {"data": [{"id": "d1", "title": "One"}]}),
+            _response(503),
+        ]
+
+        docs = Indexer._fetch_all_documents()
+
+        assert [d["id"] for d in docs] == ["d1"]
+        assert mock_get.call_count == 2
+
+    @patch("app.services.indexer.requests.get")
+    def test_fetch_all_documents_returns_empty_on_request_error(self, mock_get: MagicMock):
+        mock_get.side_effect = requests.ConnectionError("unreachable")
+
+        assert Indexer._fetch_all_documents() == []
+
+    @patch("app.services.indexer.requests.get")
+    def test_fetch_all_files_normalizes_camel_case_fields(self, mock_get: MagicMock):
+        mock_get.side_effect = [
+            _response(200, {"files": [{
+                "id": "f1",
+                "name": "report.pdf",
+                "mimeType": "application/pdf",
+                "ownerId": "user-1",
+                "folderId": "folder-1",
+                "sizeBytes": 42,
+                "createdAt": "2026-01-01T00:00:00Z",
+                "updatedAt": "2026-01-02T00:00:00Z",
+            }]}),
+            _response(200, {"files": []}),
+        ]
+
+        files = Indexer._fetch_all_files()
+
+        assert files == [{
+            "id": "f1",
+            "name": "report.pdf",
+            "mime_type": "application/pdf",
+            "owner_id": "user-1",
+            "folder_id": "folder-1",
+            "tags": [],
+            "size": 42,
+            "created_at": "2026-01-01T00:00:00Z",
+            "updated_at": "2026-01-02T00:00:00Z",
+            "type": "file",
+        }]
+
+    @patch("app.services.indexer.requests.get")
+    def test_fetch_all_files_prefers_snake_case_fields(self, mock_get: MagicMock):
+        mock_get.side_effect = [
+            _response(200, {"items": [{
+                "id": "f1",
+                "name": "a.txt",
+                "mime_type": "text/plain",
+                "mimeType": "ignored",
+                "size": 7,
+                "size_bytes": 99,
+            }]}),
+            _response(200, {}),
+        ]
+
+        files = Indexer._fetch_all_files()
+
+        assert files[0]["mime_type"] == "text/plain"
+        assert files[0]["size"] == 7
+
+    @patch("app.services.indexer.requests.get")
+    def test_fetch_all_files_returns_empty_on_request_error(self, mock_get: MagicMock):
+        mock_get.side_effect = requests.Timeout("slow")
+
+        assert Indexer._fetch_all_files() == []
+
+    def test_reindex_passes_fetched_data_to_search(self, indexer: Indexer):
+        docs = [{"id": "d1", "type": "document"}]
+        files = [{"id": "f1", "type": "file"}]
+        indexer.search = MagicMock()
+        indexer.search.reindex.return_value = {"status": "reindexed"}
+
+        with patch.object(Indexer, "_fetch_all_documents", return_value=docs), \
+                patch.object(Indexer, "_fetch_all_files", return_value=files):
+            result = indexer.reindex()
+
+        indexer.search.reindex.assert_called_once_with(documents=docs, files=files)
+        assert result == {"status": "reindexed"}
