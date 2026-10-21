@@ -363,7 +363,12 @@ build_helm_args() {
       EXTRA_ARGS+=(--set-string "config.REDIS_HOST=${REDIS_HOST}" --set-string "config.REDIS_PORT=6379")
       EXTRA_ARGS+=(--set-string "config.DOC_SVC_AWS_REGION=${AWS_REGION}")
       EXTRA_ARGS+=(--set-string "config.DOC_SVC_SNS_TOPIC_ARN=${SNS_TOPIC}")
-      add_secret DOC_SVC_DATABASE_URL "postgresql+asyncpg://$(urlencode "${DB_USER}"):$(urlencode "${DB_PASSWORD}")@${DB_ENDPOINT_HOST}:${DB_ENDPOINT_PORT}/${DB_NAME}" ;;
+      # document-service stores its data in MongoDB Atlas; MONGODB_URL is the
+      # Atlas connection string (mongodb+srv://...). The database name is per
+      # deployment so tenants stay isolated inside one cluster.
+      : "${MONGODB_URL:?MONGODB_URL (Atlas connection string) is required for document-service}"
+      add_secret DOC_SVC_MONGODB_URL "${MONGODB_URL}"
+      EXTRA_ARGS+=(--set-string "config.DOC_SVC_MONGODB_DATABASE=${DB_NAME}_documents") ;;
     collab-service)
       EXTRA_ARGS+=(--set-string "config.HTTP_PORT=8084" --set-string "config.NODE_ENV=production")
       EXTRA_ARGS+=(--set-string "config.REDIS_HOST=${REDIS_HOST}" --set-string "config.REDIS_PORT=6379") ;;

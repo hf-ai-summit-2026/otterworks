@@ -4,10 +4,9 @@ import structlog
 from fastapi import APIRouter, Depends
 from fastapi.responses import PlainTextResponse
 from prometheus_client import CONTENT_TYPE_LATEST, Gauge, generate_latest
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import AsyncSession
+from pymongo.asynchronous.database import AsyncDatabase
 
-from app.db.session import get_db
+from app.db.mongo import get_db, ping
 
 logger = structlog.get_logger()
 router = APIRouter()
@@ -17,10 +16,10 @@ SERVICE_UP.set(1)
 
 
 @router.get("/health")
-async def health(db: AsyncSession = Depends(get_db)):
+async def health(db: AsyncDatabase = Depends(get_db)):
     """Health check with DB connectivity verification."""
     try:
-        await db.execute(text("SELECT 1"))
+        await ping(db)
         db_status = "connected"
     except Exception:
         logger.exception("health_check_db_failed")

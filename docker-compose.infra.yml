@@ -25,6 +25,23 @@ services:
     tmpfs:
     - /tmp
     - /var/run/postgresql
+  mongodb:
+    image: mongo:7
+    container_name: otterworks-mongodb
+    ports:
+    - 27017:27017
+    volumes:
+    - mongodb_data:/data/db
+    healthcheck:
+      test:
+      - CMD
+      - mongosh
+      - --quiet
+      - --eval
+      - db.adminCommand('ping').ok
+      interval: 10s
+      timeout: 5s
+      retries: 5
   redis:
     image: redis:7-alpine
     container_name: otterworks-redis
@@ -247,6 +264,7 @@ networks:
   default:
     name: otterworks-network
 volumes:
+  mongodb_data: null
   postgres_data: null
   localstack_data: null
   meilisearch_data: null

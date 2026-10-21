@@ -2,9 +2,9 @@
 
 import structlog
 from fastapi import APIRouter, Depends, status
-from sqlalchemy.ext.asyncio import AsyncSession
+from pymongo.asynchronous.database import AsyncDatabase
 
-from app.db.session import get_db
+from app.db.mongo import get_db
 from app.schemas.document import TemplateCreate, TemplateResponse
 from app.services.document_service import DocumentService
 
@@ -14,7 +14,7 @@ router = APIRouter()
 
 @router.get("/", response_model=list[TemplateResponse])
 async def list_templates(
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """List all templates."""
     service = DocumentService(db)
@@ -26,7 +26,7 @@ async def list_templates(
 )
 async def create_template(
     body: TemplateCreate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Create a new template."""
     service = DocumentService(db)

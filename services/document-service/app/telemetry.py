@@ -11,9 +11,7 @@ import structlog
 from fastapi import FastAPI, Request, Response
 from prometheus_client import Counter, Gauge, Histogram
 from prometheus_fastapi_instrumentator import Instrumentator
-from sqlalchemy import event
-from sqlalchemy.engine import Engine
-from sqlalchemy.ext.asyncio import AsyncEngine
+from pymongo import monitoring
 
 from app.config import settings
 
@@ -124,22 +122,47 @@ def _read_memory_limit_bytes() -> int:
     return 0
 
 
-def instrument_sql() -> None:
-    """Count and time every SQL statement, attributing it to the active request."""
+# Driver-level commands that are not application queries.
+_NON_QUERY_COMMANDS = frozenset(
+    {"ping", "hello", "ismaster", "isMaster", "endSessions", "saslStart", "saslContinue",
+     "buildInfo", "getMore", "killCursors", "listIndexes", "createIndexes"}
+)
 
-    @event.listens_for(Engine, "before_cursor_execute")
-    def _before(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
-        conn.info.setdefault("query_start", []).append(time.perf_counter())
 
-    @event.listens_for(Engine, "after_cursor_execute")
-    def _after(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
-        starts = conn.info.get("query_start") or []
-        if starts:
-            DB_QUERY_SECONDS.labels(SERVICE).observe(time.perf_counter() - starts.pop())
+class _QueryMetricsListener(monitoring.CommandListener):
+    """Count and time every MongoDB command, attributing it to the active request."""
+
+    def _record(
+        self, event: monitoring.CommandSucceededEvent | monitoring.CommandFailedEvent
+    ) -> None:
+        if event.command_name in _NON_QUERY_COMMANDS:
+            return
+        DB_QUERY_SECONDS.labels(SERVICE).observe(event.duration_micros / 1_000_000)
         DB_QUERIES_TOTAL.labels(SERVICE).inc()
         counter = _request_queries.get()
         if counter is not None:
             counter[0] += 1
+
+    def started(self, event: monitoring.CommandStartedEvent) -> None:
+        return
+
+    def succeeded(self, event: monitoring.CommandSucceededEvent) -> None:
+        self._record(event)
+
+    def failed(self, event: monitoring.CommandFailedEvent) -> None:
+        self._record(event)
+
+
+_db_instrumented = False
+
+
+def instrument_db() -> None:
+    """Register the command listener; must run before the MongoDB client is created."""
+    global _db_instrumented
+    if _db_instrumented:
+        return
+    monitoring.register(_QueryMetricsListener())
+    _db_instrumented = True
 
 
 def _handler_label(request: Request) -> str:
@@ -195,15 +218,15 @@ def _default_metrics():  # noqa: ANN202
     )
 
 
-def setup_tracing(app: FastAPI, engine: AsyncEngine) -> None:
-    """Ship request and SQL spans to the OTLP collector when tracing is enabled."""
+def setup_tracing(app: FastAPI) -> None:
+    """Ship request and MongoDB spans to the OTLP collector when tracing is enabled."""
     if not settings.otel_enabled:
         return
     try:
         from opentelemetry import trace
         from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
         from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-        from opentelemetry.instrumentation.sqlalchemy import SQLAlchemyInstrumentor
+        from opentelemetry.instrumentation.pymongo import PymongoInstrumentor
         from opentelemetry.sdk.resources import SERVICE_NAME, Resource
         from opentelemetry.sdk.trace import TracerProvider
         from opentelemetry.sdk.trace.export import BatchSpanProcessor
@@ -223,9 +246,7 @@ def setup_tracing(app: FastAPI, engine: AsyncEngine) -> None:
         FastAPIInstrumentor.instrument_app(
             app, excluded_urls="health,metrics,ready", tracer_provider=provider
         )
-        SQLAlchemyInstrumentor().instrument(
-            engine=engine.sync_engine, tracer_provider=provider, enable_commenter=False
-        )
+        PymongoInstrumentor().instrument(tracer_provider=provider)
         logger.info("opentelemetry_instrumented", endpoint=endpoint)
     except Exception:
         logger.exception("opentelemetry_setup_failed")

@@ -10,8 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app import telemetry
 from app.api import comments, documents, health, templates
 from app.config import settings
-from app.db.migrate import upgrade_to_head
-from app.db.session import async_session, engine
+from app.db.mongo import client, database, ensure_indexes
 from app.jobs import stats_rollup
 from app.middleware import request_log
 
@@ -34,15 +33,15 @@ structlog.configure(
 @asynccontextmanager
 async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     logger.info("document_service_starting")
-    await upgrade_to_head(engine)
-    rollup_task = stats_rollup.start(async_session)
+    await ensure_indexes(database)
+    rollup_task = stats_rollup.start(database)
 
     logger.info("document_service_started")
     yield
     logger.info("document_service_shutting_down")
     if rollup_task is not None:
         rollup_task.cancel()
-    await engine.dispose()
+    await client.close()
 
 
 app = FastAPI(
@@ -54,9 +53,8 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
-telemetry.instrument_sql()
 telemetry.instrument_app(app)
-telemetry.setup_tracing(app, engine)
+telemetry.setup_tracing(app)
 request_log.install(app)
 
 app.add_middleware(

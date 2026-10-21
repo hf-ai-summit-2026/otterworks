@@ -1,25 +1,25 @@
-"""Shared test fixtures."""
+"""Shared test fixtures.
 
+Tests run against a real MongoDB (``DOC_SVC_TEST_MONGODB_URL``, default
+``mongodb://localhost:27017``); every test starts from emptied collections.
+"""
+
+import os
 import uuid
 from collections.abc import AsyncGenerator
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
+from pymongo.asynchronous.database import AsyncDatabase
+from pymongo.asynchronous.mongo_client import AsyncMongoClient
 
 from app.api import documents as documents_api
-from app.db.base import Base
-from app.db.session import get_db
+from app.db.mongo import ensure_indexes, get_db
 from app.main import app
 from app.middleware import request_log
-from app.models.document import Comment, Document, DocumentVersion, Template  # noqa: F401
 
-TEST_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
-
-engine = create_async_engine(TEST_DATABASE_URL, echo=False)
-TestingSessionLocal = async_sessionmaker(
-    engine, class_=AsyncSession, expire_on_commit=False
-)
+TEST_MONGODB_URL = os.environ.get("DOC_SVC_TEST_MONGODB_URL", "mongodb://localhost:27017")
+TEST_DATABASE = "otterworks_documents_test"
 
 
 @pytest.fixture(autouse=True)
@@ -29,23 +29,29 @@ def chaos_flags_off(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(request_log, "flag_active", lambda key: False)
 
 
-@pytest.fixture(autouse=True)
-async def setup_db():
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+@pytest.fixture
+async def db_session() -> AsyncGenerator[AsyncDatabase, None]:
+    client: AsyncMongoClient = AsyncMongoClient(
+        TEST_MONGODB_URL, tz_aware=True, serverSelectionTimeoutMS=5000
+    )
+    db = client[TEST_DATABASE]
+    await _clear(db)
+    await ensure_indexes(db)
+    try:
+        yield db
+    finally:
+        await _clear(db)
+        await client.close()
+
+
+async def _clear(db: AsyncDatabase) -> None:
+    """Empty every collection; keeps the collections (and their indexes) in place."""
+    for name in await db.list_collection_names():
+        await db[name].delete_many({})
 
 
 @pytest.fixture
-async def db_session() -> AsyncGenerator[AsyncSession, None]:
-    async with TestingSessionLocal() as session:
-        yield session
-
-
-@pytest.fixture
-async def client(db_session: AsyncSession) -> AsyncGenerator[AsyncClient, None]:
+async def client(db_session: AsyncDatabase) -> AsyncGenerator[AsyncClient, None]:
     async def _override_get_db():
         yield db_session
 

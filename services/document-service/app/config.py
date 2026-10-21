@@ -8,9 +8,10 @@ class Settings(BaseSettings):
     app_version: str = "0.1.0"
     debug: bool = False
 
-    database_url: str = (
-        "postgresql+asyncpg://otterworks:otterworks_dev@localhost:5432/otterworks"
-    )
+    mongodb_url: str = "mongodb://localhost:27017"
+    mongodb_database: str = "otterworks_documents"
+    mongodb_server_selection_timeout_ms: int = 5000
+    # Driver connection pool: maxPoolSize = db_pool_size + db_max_overflow.
     db_pool_size: int = 10
     db_max_overflow: int = 20
 

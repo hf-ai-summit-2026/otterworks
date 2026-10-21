@@ -70,10 +70,10 @@ OtterWorks is a collaborative file storage and document editing platform (functi
 ### 4. Document Service (`services/document-service/`)
 - **Language**: Python 3.12
 - **Framework**: FastAPI 0.110
-- **Database**: PostgreSQL (document metadata, content snapshots)
+- **Database**: MongoDB Atlas (documents, versions, comments, templates, stats rollups as collections)
 - **Purpose**: Document CRUD operations, version history, content snapshots, template management. Stores document operational transforms and provides REST API for document metadata.
 - **Port**: 8083
-- **Key Patterns**: Pydantic models, SQLAlchemy async, Alembic migrations, dependency injection, background tasks, structlog
+- **Key Patterns**: Pydantic models, PyMongo async driver, boot-time index creation, dependency injection, background tasks, structlog
 
 ### 5. Collaboration Service (`services/collab-service/`)
 - **Language**: Node.js 20 (TypeScript)
@@ -142,7 +142,8 @@ OtterWorks is a collaborative file storage and document editing platform (functi
 ### Databases
 | Store | Technology | Purpose |
 |-------|-----------|---------|
-| Primary RDBMS | PostgreSQL 15 (RDS) | Users, documents, admin data |
+| Primary RDBMS | PostgreSQL 15 (RDS) | Users, admin data |
+| Document store | MongoDB Atlas | Documents, versions, comments, templates |
 | Cache/Sessions | Redis 7 (ElastiCache) | Sessions, CRDT state, presence, rate limiting |
 | NoSQL | DynamoDB | File metadata, audit events, notification history |
 | Search | MeiliSearch 1.6 | Full-text document search, autocomplete |

@@ -145,22 +145,18 @@ services:
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test
       AWS_ENDPOINT_URL: http://localstack:4566
-      POSTGRES_HOST: postgres
-      POSTGRES_PORT: 5432
-      POSTGRES_USER: otterworks
-      POSTGRES_PASSWORD: otterworks_dev
-      POSTGRES_DB: otterworks
       REDIS_HOST: redis
       REDIS_PORT: 6379
       OTEL_EXPORTER_OTLP_ENDPOINT: http://otel-collector:4318
       OTEL_SERVICE_NAME: document-service
-      DOC_SVC_DATABASE_URL: postgresql+asyncpg://otterworks:otterworks_dev@postgres:5432/otterworks
+      DOC_SVC_MONGODB_URL: mongodb://mongodb:27017
+      DOC_SVC_MONGODB_DATABASE: otterworks_documents
       DOC_SVC_SNS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:otterworks-events
       DOC_SVC_AWS_ENDPOINT_URL: http://localstack:4566
       DOC_SVC_SNS_ENABLED: 'true'
       JWT_SECRET: ${JWT_SECRET:-otterworks-local-dev-jwt-secret-change-me-in-production}
     depends_on:
-      postgres:
+      mongodb:
         condition: service_healthy
     healthcheck:
       test:

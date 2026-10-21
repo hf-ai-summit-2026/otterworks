@@ -9,11 +9,10 @@ import jwt
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import PlainTextResponse
-from sqlalchemy.exc import SQLAlchemyError
-from sqlalchemy.ext.asyncio import AsyncSession
+from pymongo.asynchronous.database import AsyncDatabase
 
 from app.chaos import FLAG_RENDER_CACHE, FLAG_SLOW_QUERIES, flag_active
-from app.db.session import get_db
+from app.db.mongo import get_db
 from app.schemas.document import (
     DocumentCreate,
     DocumentFromTemplate,
@@ -88,7 +87,7 @@ def _ensure_owner(document: object, user_id: UUID) -> None:
 async def _do_create_document(
     body: DocumentCreate,
     request: Request,
-    db: AsyncSession,
+    db: AsyncDatabase,
 ) -> DocumentResponse:
     if not body.owner_id:
         extracted_id = _extract_user_id(request)
@@ -109,7 +108,7 @@ async def _do_create_document(
 async def create_document(
     body: DocumentCreate,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Create a new document."""
     await _maybe_inject_latency()
@@ -125,7 +124,7 @@ async def create_document(
 async def create_document_no_slash(
     body: DocumentCreate,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Create a new document (no trailing slash)."""
     await _maybe_inject_latency()
@@ -137,7 +136,7 @@ async def search_documents(
     q: str = Query(..., min_length=1),
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Search documents by title or content."""
     await _maybe_inject_latency()
@@ -166,7 +165,7 @@ async def read_export(name: str = Query(..., min_length=1)):
 async def get_shared_document(
     document_id: UUID,
     token: str = Query(..., min_length=1),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Return a document through its read-only share link."""
     if not ShareLinkService().verify_token(str(document_id), token):
@@ -182,7 +181,7 @@ async def _do_list_documents(
     folder_id: UUID | None,
     page: int,
     size: int,
-    db: AsyncSession,
+    db: AsyncDatabase,
 ) -> DocumentListResponse:
     await _maybe_inject_latency()
     service = DocumentService(db)
@@ -207,7 +206,7 @@ async def _do_filter_documents(
     direction: str,
     page: int,
     size: int,
-    db: AsyncSession,
+    db: AsyncDatabase,
 ) -> DocumentListResponse:
     await _maybe_inject_latency()
     repo = DocumentQueryRepository(db)
@@ -226,7 +225,7 @@ async def _do_filter_documents(
             limit=size,
             offset=(page - 1) * size,
         )
-    except SQLAlchemyError as exc:
+    except ValueError as exc:
         raise HTTPException(status_code=400, detail=f"Invalid filter: {exc}") from exc
     return DocumentListResponse(
         items=[DocumentResponse.model_validate(row) for row in rows],
@@ -264,7 +263,7 @@ async def list_documents(
     direction: str = DEFAULT_DIRECTION,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """List documents with optional filtering and pagination."""
     effective_owner = owner_id or _extract_user_id(request)
@@ -298,7 +297,7 @@ async def list_documents_no_slash(
     direction: str = DEFAULT_DIRECTION,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """List documents (no trailing slash)."""
     effective_owner = owner_id or _extract_user_id(request)
@@ -321,7 +320,7 @@ async def list_documents_no_slash(
 async def get_document(
     document_id: UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Get a document by ID."""
     await _maybe_inject_latency()
@@ -339,7 +338,7 @@ async def update_document(
     document_id: UUID,
     body: DocumentUpdate,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Full replace of a document."""
     await _maybe_inject_latency()
@@ -359,7 +358,7 @@ async def patch_document(
     document_id: UUID,
     body: DocumentPatch,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Partial update of a document."""
     await _maybe_inject_latency()
@@ -378,7 +377,7 @@ async def patch_document(
 async def delete_document(
     document_id: UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Delete a document (soft delete)."""
     await _maybe_inject_latency()
@@ -396,7 +395,7 @@ async def delete_document(
 async def list_versions(
     document_id: UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """List document versions."""
     user_id = _require_user_id(request)
@@ -417,7 +416,7 @@ async def restore_version(
     document_id: UUID,
     version_id: UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Restore a document to a previous version."""
     user_id = _require_user_id(request)
@@ -443,7 +442,7 @@ async def restore_version(
 async def create_share_link(
     document_id: UUID,
     request: Request,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Mint a read-only share link for a document."""
     user_id = _require_user_id(request)
@@ -462,7 +461,7 @@ async def export_document(
     document_id: UUID,
     request: Request,
     format: str = Query("markdown", pattern="^(pdf|html|markdown)$"),  # noqa: A002
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Export a document in the requested format."""
     user_id = _require_user_id(request)
@@ -492,7 +491,7 @@ async def export_document(
 async def create_from_template(
     template_id: UUID,
     body: DocumentFromTemplate,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncDatabase = Depends(get_db),
 ):
     """Create a document from a template."""
     service = DocumentService(db)
