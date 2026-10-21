@@ -55,6 +55,7 @@ public class AuditService : IAuditService
         string? userId, string? action, string? resourceType, string? resourceId,
         DateTime? from, DateTime? to, int page, int pageSize)
     {
+        page = Math.Max(page, 1);
         return await _repository.QueryEventsAsync(userId, action, resourceType, resourceId, from, to, page, pageSize);
     }
 
