@@ -131,6 +131,13 @@ def advanced_search() -> tuple:
     tags = data.get("tags")
     date_from = data.get("date_from")
     date_to = data.get("date_to")
+    if tags is not None and (
+        not isinstance(tags, list) or not all(isinstance(tag, str) for tag in tags)
+    ):
+        return jsonify({"error": "'tags' must be a list of strings"}), 400
+    for field, value in (("date_from", date_from), ("date_to", date_to)):
+        if value is not None and not isinstance(value, str):
+            return jsonify({"error": f"'{field}' must be a string"}), 400
     try:
         page = max(int(data.get("page", 1)), 1)
         page_size = min(max(int(data.get("size", 20)), 1), 100)
