@@ -247,13 +247,16 @@ class AzureSqlTarget:
     def ensure_reader(self, user: str, password: str) -> None:
         if not _IDENT_RE.match(user):
             raise ConfigError(f"unsafe reader user name {user!r}")
-        pwd = password.replace("'", "''")
-        self._script(
-            f"IF DATABASE_PRINCIPAL_ID(N'{user}') IS NULL CREATE USER {_ident(user)} WITH PASSWORD = N'{pwd}';\n"
-            f"ELSE ALTER USER {_ident(user)} WITH PASSWORD = N'{pwd}';\nGO\n"
-            f"IF IS_ROLEMEMBER(N'ldm_report_reader', N'{user}') = 0 "
-            f"ALTER ROLE ldm_report_reader ADD MEMBER {_ident(user)};"
-        )
+        # CREATE/ALTER USER take no parameters, so the bound values are quoted server-side with QUOTENAME.
+        self._exec(
+            "DECLARE @u sysname = ?, @p nvarchar(128) = ?, @q nvarchar(max);\n"
+            "SET @q = CASE WHEN DATABASE_PRINCIPAL_ID(@u) IS NULL THEN N'CREATE USER ' ELSE N'ALTER USER ' END "
+            "+ QUOTENAME(@u) + N' WITH PASSWORD = N' + QUOTENAME(@p, N'''');\n"
+            "EXEC sp_executesql @q;\n"
+            "IF IS_ROLEMEMBER(N'ldm_report_reader', @u) = 0\n"
+            "BEGIN SET @q = N'ALTER ROLE ldm_report_reader ADD MEMBER ' + QUOTENAME(@u); EXEC sp_executesql @q; END",
+            (user, password),
+        ).close()  # type: ignore[attr-defined]
 
     def apply_sql_in_namespace(self, sql_text: str, namespace: str) -> None:
         cur = self._cursor()
