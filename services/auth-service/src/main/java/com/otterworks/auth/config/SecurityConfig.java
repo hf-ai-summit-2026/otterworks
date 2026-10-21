@@ -32,6 +32,7 @@ public class SecurityConfig {
             auth ->
                 auth.requestMatchers(
                         "/health",
+                        "/livez",
                         "/metrics",
                         "/actuator/health",
                         "/actuator/info",

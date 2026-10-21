@@ -1,4 +1,22 @@
+# Ignored when autoscaling.enabled (the HPA owns the replica count).
 replicaCount: 1
+
+autoscaling:
+  enabled: false
+  minReplicas: 2
+  maxReplicas: 10
+  # Utilization is measured against resources.requests.cpu, so size requests realistically
+  # before enabling (see values-10x.yaml).
+  targetCPUUtilizationPercentage: 70
+
+podDisruptionBudget:
+  enabled: false
+  maxUnavailable: 1
+
+# Lets in-flight requests finish: preStop sleep (endpoint removal) + Spring graceful
+# shutdown (spring.lifecycle.timeout-per-shutdown-phase=20s).
+terminationGracePeriodSeconds: 40
+preStopSleepSeconds: 5
 
 image:
   repository: <AWS_ACCOUNT_ID>.dkr.ecr.us-east-1.amazonaws.com/workshop/otterworks-auth-service
@@ -34,7 +52,9 @@ resources:
     memory: 128Mi
 
 healthCheck:
+  # Readiness: DB-aware. Liveness/startup: process-only, so a slow DB never restarts pods.
   path: /health
+  livenessPath: /livez
   port: 8081
 
 monitoring:

@@ -18,10 +18,11 @@ public interface RefreshTokenRepository extends JpaRepository<RefreshToken, UUID
   Optional<RefreshToken> findByTokenIdAndRevokedFalse(String tokenId);
 
   @Modifying
-  @Query("UPDATE RefreshToken r SET r.revoked = true WHERE r.user.id = :userId")
+  @Query(
+      "UPDATE RefreshToken r SET r.revoked = true WHERE r.user.id = :userId AND r.revoked = false")
   void revokeAllByUserId(@Param("userId") UUID userId);
 
   @Modifying
   @Query("DELETE FROM RefreshToken r WHERE r.expiresAt < :now")
-  void deleteExpiredTokens(@Param("now") Instant now);
+  int deleteExpiredTokens(@Param("now") Instant now);
 }

@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionOperations;
 
 @Service
 public class AuthService {
@@ -28,36 +29,44 @@ public class AuthService {
   private final PasswordEncoder passwordEncoder;
   private final JwtTokenProvider jwtTokenProvider;
   private final RefreshTokenRepository refreshTokenRepository;
+  private final TransactionOperations transactionOperations;
 
   public AuthService(
       UserRepository userRepository,
       PasswordEncoder passwordEncoder,
       JwtTokenProvider jwtTokenProvider,
-      RefreshTokenRepository refreshTokenRepository) {
+      RefreshTokenRepository refreshTokenRepository,
+      TransactionOperations transactionOperations) {
     this.userRepository = userRepository;
     this.passwordEncoder = passwordEncoder;
     this.jwtTokenProvider = jwtTokenProvider;
     this.refreshTokenRepository = refreshTokenRepository;
+    this.transactionOperations = transactionOperations;
   }
 
-  @Transactional
+  // BCrypt hashing (~250ms of CPU at cost 12) deliberately runs outside any transaction so a
+  // login or registration only holds a database connection for its short writes.
   public AuthResponse register(RegisterRequest request) {
     if (userRepository.existsByEmail(request.getEmail())) {
       throw new IllegalArgumentException("Email already registered");
     }
 
-    User user = new User();
-    user.setEmail(request.getEmail());
-    user.setPasswordHash(passwordEncoder.encode(request.getPassword()));
-    user.setDisplayName(request.getDisplayName());
-    user.setRoles(Set.of(User.Role.USER));
-    user = userRepository.save(user);
+    String passwordHash = passwordEncoder.encode(request.getPassword());
 
-    log.info("User registered: email={}", user.getEmail());
-    return buildAuthResponse(user);
+    return transactionOperations.execute(
+        status -> {
+          User user = new User();
+          user.setEmail(request.getEmail());
+          user.setPasswordHash(passwordHash);
+          user.setDisplayName(request.getDisplayName());
+          user.setRoles(Set.of(User.Role.USER));
+          user = userRepository.save(user);
+
+          log.info("User registered: email={}", user.getEmail());
+          return buildAuthResponse(user);
+        });
   }
 
-  @Transactional
   public AuthResponse login(LoginRequest request) {
     User user =
         userRepository
@@ -68,11 +77,17 @@ public class AuthService {
       throw new IllegalArgumentException("Invalid credentials");
     }
 
-    user.setLastLoginAt(Instant.now());
-    userRepository.save(user);
+    AuthResponse response =
+        transactionOperations.execute(
+            status -> {
+              Instant now = Instant.now();
+              userRepository.updateLastLoginAt(user.getId(), now);
+              user.setLastLoginAt(now);
+              return buildAuthResponse(user);
+            });
 
     log.info("User logged in: email={}", user.getEmail());
-    return buildAuthResponse(user);
+    return response;
   }
 
   @Transactional
@@ -101,7 +116,6 @@ public class AuthService {
     return buildAuthResponse(user);
   }
 
-  @Transactional
   public void changePassword(UUID userId, ChangePasswordRequest request) {
     User user =
         userRepository
@@ -112,10 +126,14 @@ public class AuthService {
       throw new IllegalArgumentException("Current password is incorrect");
     }
 
-    user.setPasswordHash(passwordEncoder.encode(request.getNewPassword()));
-    userRepository.save(user);
+    String newPasswordHash = passwordEncoder.encode(request.getNewPassword());
 
-    refreshTokenRepository.revokeAllByUserId(userId);
+    transactionOperations.executeWithoutResult(
+        status -> {
+          user.setPasswordHash(newPasswordHash);
+          userRepository.save(user);
+          refreshTokenRepository.revokeAllByUserId(userId);
+        });
     log.info("Password changed for user: {}", userId);
   }
 

@@ -13,16 +13,21 @@ import com.otterworks.auth.entity.User;
 import com.otterworks.auth.repository.RefreshTokenRepository;
 import com.otterworks.auth.repository.UserRepository;
 import com.otterworks.auth.security.JwtTokenProvider;
+import java.time.Instant;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.atomic.AtomicBoolean;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
+import org.mockito.Spy;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.security.crypto.password.PasswordEncoder;
+import org.springframework.transaction.support.TransactionCallback;
+import org.springframework.transaction.support.TransactionOperations;
 
 @ExtendWith(MockitoExtension.class)
 class AuthServiceTest {
@@ -31,6 +36,7 @@ class AuthServiceTest {
   @Mock private PasswordEncoder passwordEncoder;
   @Mock private JwtTokenProvider jwtTokenProvider;
   @Mock private RefreshTokenRepository refreshTokenRepository;
+  @Spy private TransactionOperations transactionOperations = new InTransactionTracker();
 
   @InjectMocks private AuthService authService;
 
@@ -101,7 +107,6 @@ class AuthServiceTest {
 
     when(userRepository.findByEmail("test@otterworks.dev")).thenReturn(Optional.of(testUser));
     when(passwordEncoder.matches("password123", testUser.getPasswordHash())).thenReturn(true);
-    when(userRepository.save(any(User.class))).thenReturn(testUser);
     when(jwtTokenProvider.generateAccessToken(testUser)).thenReturn("access-token");
     when(jwtTokenProvider.generateRefreshToken(testUser)).thenReturn("refresh-token");
     when(jwtTokenProvider.extractJti("refresh-token")).thenReturn("jti-456");
@@ -114,6 +119,67 @@ class AuthServiceTest {
 
     assertThat(response.getAccessToken()).isEqualTo("access-token");
     assertThat(response.getUser().getEmail()).isEqualTo("test@otterworks.dev");
+    verify(userRepository).updateLastLoginAt(eq(testUser.getId()), any(Instant.class));
+    verify(userRepository, never()).save(any(User.class));
+  }
+
+  @Test
+  void passwordHashing_shouldNotHoldATransaction() {
+    InTransactionTracker tracker = (InTransactionTracker) transactionOperations;
+    when(passwordEncoder.matches(anyString(), anyString()))
+        .thenAnswer(inv -> !tracker.active.get());
+    when(passwordEncoder.encode(anyString()))
+        .thenAnswer(
+            inv -> {
+              assertThat(tracker.active.get()).as("encode inside transaction").isFalse();
+              return "$2a$12$encoded";
+            });
+    when(userRepository.findByEmail("test@otterworks.dev")).thenReturn(Optional.of(testUser));
+    when(userRepository.findById(testUser.getId())).thenReturn(Optional.of(testUser));
+    when(userRepository.save(any(User.class)))
+        .thenAnswer(
+            inv -> {
+              User u = inv.getArgument(0);
+              if (u.getId() == null) {
+                u.setId(UUID.randomUUID());
+              }
+              return u;
+            });
+    when(jwtTokenProvider.generateRefreshToken(any(User.class))).thenReturn("refresh-token");
+    when(jwtTokenProvider.extractJti("refresh-token")).thenReturn("jti");
+
+    LoginRequest login = new LoginRequest();
+    login.setEmail("test@otterworks.dev");
+    login.setPassword("password123");
+    assertThat(authService.login(login)).isNotNull();
+
+    RegisterRequest register = new RegisterRequest();
+    register.setEmail("new@otterworks.dev");
+    register.setPassword("password123");
+    register.setDisplayName("New User");
+    assertThat(authService.register(register)).isNotNull();
+
+    ChangePasswordRequest change = new ChangePasswordRequest();
+    change.setCurrentPassword("oldPassword");
+    change.setNewPassword("newPassword123");
+    authService.changePassword(testUser.getId(), change);
+
+    verify(transactionOperations, times(3)).execute(any());
+  }
+
+  /** Runs callbacks inline and records whether one is in progress. */
+  static class InTransactionTracker implements TransactionOperations {
+    final AtomicBoolean active = new AtomicBoolean();
+
+    @Override
+    public <T> T execute(TransactionCallback<T> action) {
+      active.set(true);
+      try {
+        return action.doInTransaction(null);
+      } finally {
+        active.set(false);
+      }
+    }
   }
 
   @Test
@@ -156,6 +222,7 @@ class AuthServiceTest {
 
     authService.changePassword(testUser.getId(), request);
 
+    assertThat(testUser.getPasswordHash()).isEqualTo("$2a$12$newencoded");
     verify(userRepository).save(testUser);
     verify(refreshTokenRepository).revokeAllByUserId(testUser.getId());
   }

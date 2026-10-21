@@ -9,7 +9,9 @@ metadata:
     platform/environment: {{ (.Values.global).environment | default "dev" }}
     platform/team: otterworks
 spec:
+  {{- if not .Values.autoscaling.enabled }}
   replicas: {{ .Values.replicaCount }}
+  {{- end }}
   selector:
     matchLabels:
       app.kubernetes.io/name: {{ .Chart.Name }}
@@ -21,6 +23,15 @@ spec:
         app.kubernetes.io/instance: {{ .Release.Name }}
     spec:
       serviceAccountName: {{ .Release.Name }}
+      terminationGracePeriodSeconds: {{ .Values.terminationGracePeriodSeconds }}
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: {{ .Chart.Name }}
+              app.kubernetes.io/instance: {{ .Release.Name }}
       containers:
         - name: {{ .Chart.Name }}
           image: "{{ .Values.image.repository }}:{{ required "image.tag must be set (ECR uses IMMUTABLE tags)" .Values.image.tag }}"
@@ -29,22 +40,33 @@ spec:
             - name: http
               containerPort: {{ .Values.service.targetPort }}
               protocol: TCP
+          # Probes start as soon as the JVM is up instead of after a fixed delay, so
+          # scaled-out pods take traffic sooner; 36 x 5s keeps the old ~3min boot budget.
+          startupProbe:
+            httpGet:
+              path: {{ .Values.healthCheck.livenessPath }}
+              port: {{ .Values.healthCheck.port }}
+            periodSeconds: 5
+            timeoutSeconds: 5
+            failureThreshold: 36
           livenessProbe:
             httpGet:
-              path: {{ .Values.healthCheck.path }}
+              path: {{ .Values.healthCheck.livenessPath }}
               port: {{ .Values.healthCheck.port }}
-            initialDelaySeconds: 90
             periodSeconds: 15
             timeoutSeconds: 10
-            failureThreshold: 8
+            failureThreshold: 4
           readinessProbe:
             httpGet:
               path: {{ .Values.healthCheck.path }}
               port: {{ .Values.healthCheck.port }}
-            initialDelaySeconds: 30
             periodSeconds: 10
             timeoutSeconds: 10
-            failureThreshold: 8
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sleep", "{{ .Values.preStopSleepSeconds }}"]
           resources:
             {{- toYaml .Values.resources | nindent 12 }}
           envFrom:
