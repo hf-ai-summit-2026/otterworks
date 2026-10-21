@@ -68,7 +68,8 @@ make incident-down                            # stop the stack (volumes kept)
 ```
 
 `make arm` / `make disarm` are aliases for `make incident-arm` / `make incident-disarm`.
-The harness is `incident/incident.py` (run under `uv`, no install step). Its
+The harness is `incident/incident.py` (run under `uv`, no install step), a thin
+entry point over the `incident/harness/` package (both are fixture inputs). Its
 `verify` exits `0` green, `1` red, and always writes
 `incident/reports/<scenario>-<before|after>-<stamp>.json` — on red as well as
 green. The reports directory is git-ignored generated output; paste the summary

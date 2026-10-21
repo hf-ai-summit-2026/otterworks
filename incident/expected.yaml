@@ -2,13 +2,12 @@
 # re-pin with `make incident-record REASON="..."` -- the reason is kept here
 # so every re-record is auditable in git history.
 recorded:
-  at: '2026-09-24T21:25:31.794577+00:00'
-  git_sha: 3ce8edf0eb9a2016d3559e828fe804bca862b78e
-  reason: 'gate hardening: incident-fingerprint exits 2 on fixture/source drift so
-    preflight scripts fail closed (incident-verify already did); SKILL reset path
-    no longer suggests --image-tag'
+  at: '2026-10-21T16:52:59.048194+00:00'
+  git_sha: 0405cf739a96dc51c31d6923e5277753da047fdb
+  reason: incident.py split into the incident/harness package; FIXTURE_INPUTS now
+    also covers incident/harness (source fingerprint unchanged)
 fingerprints:
-  fixture: ac48eeb2185700996096e9b8c4464c7ed1db9be9751e5acf7de26059bda3efac
+  fixture: efa4ba0680220ba3283288a9da74ccee085ccbd28ac6b7b354253c4486bedef5
   source: d55ef66d277619b561204c5ff6e7f8ddedbd6e29ebed0ce4477ad08d2eb1ea40
 scenarios:
   n-plus-one:
