@@ -76,11 +76,11 @@ def main():
                 files_deleted,
                 bytes_uploaded
             FROM analytics_daily_summary
-            WHERE report_date BETWEEN %s::date - interval '%s days' AND %s::date
+            WHERE report_date BETWEEN %s::date - make_interval(days => %s) AND %s::date
             ORDER BY report_date;
         """
 
-        cursor.execute(summary_sql, (ds, lookback_days, ds))
+        cursor.execute(summary_sql, (ds, int(lookback_days), ds))
         rows = cursor.fetchall()
 
         columns = [

@@ -36,20 +36,17 @@ def _ident(name: str) -> str:
     return f'"{name}"'
 
 
-def _lit(value: str) -> str:
-    return "'" + value.replace("'", "''") + "'"
-
-
-def render_where(selection: SelectionSpec, alias: str = "T") -> str:
-    """Selection predicate in Db2 SQL; identical in meaning to stages.extract.render_predicate."""
+def render_where(selection: SelectionSpec, alias: str = "T") -> tuple[str, list[str]]:
+    """Selection predicate in Db2 SQL with ? markers, plus its bind values (stages.extract.render_predicate)."""
     if selection.all_rows:
-        return "1 = 1"
+        return "1 = 1", []
     assert selection.class_column and selection.last_access_column and selection.last_access_before
-    classes = ", ".join(_lit(c) for c in selection.classes)
-    return (
+    classes = ", ".join("?" for _ in selection.classes)
+    sql = (
         f"{alias}.{_ident(selection.class_column)} IN ({classes}) "
-        f"AND {alias}.{_ident(selection.last_access_column)} < TIMESTAMP({_lit(selection.last_access_before)})"
+        f"AND {alias}.{_ident(selection.last_access_column)} < TIMESTAMP(CAST(? AS VARCHAR(32)))"
     )
+    return sql, [*selection.classes, selection.last_access_before]
 
 
 @dataclass(frozen=True)
@@ -176,8 +173,9 @@ class Db2Source:
 
     def select_keys(self, schema: str, table: str, selection: SelectionSpec) -> list[str]:
         key = _ident(self._key_column(selection))
-        sql = f"SELECT T.{key} FROM {_ident(schema)}.{_ident(table)} T WHERE {render_where(selection)} ORDER BY T.{key}"
-        return [str(r[0]) for r in self._rows(sql)]
+        where, params = render_where(selection)
+        sql = f"SELECT T.{key} FROM {_ident(schema)}.{_ident(table)} T WHERE {where} ORDER BY T.{key}"
+        return [str(r[0]) for r in self._rows(sql, params)]
 
     def fetch_range(
         self,
@@ -195,11 +193,12 @@ class Db2Source:
         cols = [by_name[c] for c in columns]
         key = _ident(self._key_column(selection))
         select = ", ".join(f"{self._select_expr(c)}" for c in cols)
+        where, params = render_where(selection)
         sql = (
             f"SELECT {select} FROM {_ident(schema)}.{_ident(table)} T "
-            f"WHERE {render_where(selection)} AND T.{key} BETWEEN ? AND ? ORDER BY T.{key}"
+            f"WHERE {where} AND T.{key} BETWEEN ? AND ? ORDER BY T.{key}"
         )
-        for row in self._rows(sql, (key_from, key_to)):
+        for row in self._rows(sql, (*params, key_from, key_to)):
             yield {c.name: self._coerce(c, v) for c, v in zip(cols, row, strict=True)}
 
     def purge_batch(

@@ -56,25 +56,33 @@ def _lit(value: str) -> str:
     return "'" + value.replace("'", "''") + "'"
 
 
-def timestamp_literal(text: str) -> str:
-    """TIMESTAMP(12) text from the manifest -> Oracle TO_TIMESTAMP with the 9 fraction digits Oracle keeps."""
+def timestamp_value(text: str) -> str:
+    """TIMESTAMP(12) text from the manifest -> the 9-fraction-digit text Oracle's TO_TIMESTAMP keeps."""
     if len(text) != 32:
         raise ConfigError(f"timestamp literal {text!r} is not YYYY-MM-DD-HH.MM.SS.NNNNNNNNNNNN")
     if text[29:] != "000":
         raise ConfigError(f"timestamp literal {text!r}: Oracle keeps 9 fraction digits, digits 10-12 must be 000")
-    return f"TO_TIMESTAMP({_lit(text[:29])}, {_lit(TS_FORMAT)})"
+    return text[:29]
 
 
-def render_where(selection: SelectionSpec, alias: str = "T") -> str:
-    """Selection predicate in Oracle SQL; identical in meaning to stages.extract.render_predicate."""
+def render_where(selection: SelectionSpec, alias: str = "T", first_bind: int = 1) -> tuple[str, list[str]]:
+    """Selection predicate in Oracle SQL with positional binds from :first_bind, plus its bind values
+    (identical in meaning to stages.extract.render_predicate)."""
     if selection.all_rows:
-        return "1 = 1"
+        return "1 = 1", []
     assert selection.class_column and selection.last_access_column and selection.last_access_before
-    classes = ", ".join(_lit(c) for c in selection.classes)
-    return (
-        f"{alias}.{_ident(selection.class_column)} IN ({classes}) "
-        f"AND {alias}.{_ident(selection.last_access_column)} < {timestamp_literal(selection.last_access_before)}"
+    params = [*selection.classes, timestamp_value(selection.last_access_before)]
+    marks = [f":{first_bind + n}" for n in range(len(params))]
+    sql = (
+        f"{alias}.{_ident(selection.class_column)} IN ({', '.join(marks[:-1])}) "
+        f"AND {alias}.{_ident(selection.last_access_column)} < TO_TIMESTAMP({marks[-1]}, {_lit(TS_FORMAT)})"
     )
+    return sql, params
+
+
+def _delete_in_sql(qualified: str, key: str, count: int) -> str:
+    """DELETE by key list; qualified and key are already _ident()-validated, values are positional binds."""
+    return f"DELETE FROM {qualified} WHERE {key} IN ({', '.join(f':{n + 1}' for n in range(count))})"
 
 
 @dataclass(frozen=True)
@@ -199,8 +207,9 @@ class OracleSource:
 
     def select_keys(self, schema: str, table: str, selection: SelectionSpec) -> list[str]:
         key = _ident(self._key_column(selection))
-        sql = f"SELECT T.{key} FROM {_ident(schema)}.{_ident(table)} T WHERE {render_where(selection)} ORDER BY T.{key}"
-        return [str(r[0]) for r in self._rows(sql, arraysize=20000)]
+        where, params = render_where(selection)
+        sql = f"SELECT T.{key} FROM {_ident(schema)}.{_ident(table)} T WHERE {where} ORDER BY T.{key}"
+        return [str(r[0]) for r in self._rows(sql, params, arraysize=20000)]
 
     def fetch_range(
         self,
@@ -218,11 +227,14 @@ class OracleSource:
         cols = [by_name[c] for c in columns]
         key = _ident(self._key_column(selection))
         select = ", ".join(c.select_expr() for c in cols)
+        # oracledb binds positional values in order of appearance, so the predicate's binds come first.
+        where, params = render_where(selection)
+        n = len(params)
         sql = (
             f"SELECT {select} FROM {_ident(schema)}.{_ident(table)} T "
-            f"WHERE {render_where(selection)} AND T.{key} BETWEEN :1 AND :2 ORDER BY T.{key}"
+            f"WHERE {where} AND T.{key} BETWEEN :{n + 1} AND :{n + 2} ORDER BY T.{key}"
         )
-        for row in self._rows(sql, (key_from, key_to)):
+        for row in self._rows(sql, (*params, key_from, key_to)):
             yield {c.name: c.coerce(v) for c, v in zip(cols, row, strict=True)}
 
     def purge_batch(
@@ -249,8 +261,7 @@ class OracleSource:
                 deleted = 0
                 for i in range(0, len(keys), IN_LIST_MAX):
                     part = list(keys[i : i + IN_LIST_MAX])
-                    placeholders = ", ".join(f":{n + 1}" for n in range(len(part)))
-                    cur.execute(f"DELETE FROM {qualified} WHERE {key} IN ({placeholders})", part)
+                    cur.execute(_delete_in_sql(qualified, key, len(part)), part)
                     deleted += int(cur.rowcount)
             if deleted != len(keys):
                 conn.rollback()

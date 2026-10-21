@@ -19,7 +19,7 @@ from ldm.drivers.oracle import (
     OracleSource,
     ora_error,
     render_where,
-    timestamp_literal,
+    timestamp_value,
 )
 from ldm.errors import ConfigError, PurgeGuardError, SourceError
 from ldm.stages.purge import is_transient
@@ -145,18 +145,32 @@ SEL_DOCARCH = SelectionSpec(
 
 
 def test_render_where_all_rows_and_predicate() -> None:
-    assert render_where(SEL_ALL) == "1 = 1"
+    assert render_where(SEL_ALL) == ("1 = 1", [])
     assert render_where(SEL_DOCARCH) == (
-        "T.\"RETENTION_CLASS\" IN ('FIN7', 'LGL7') AND T.\"LAST_ACCESS_TS\" < "
-        "TO_TIMESTAMP('2019-01-01-00.00.00.000000000', 'YYYY-MM-DD-HH24.MI.SS.FF9')"
+        'T."RETENTION_CLASS" IN (:1, :2) AND T."LAST_ACCESS_TS" < TO_TIMESTAMP(:3, \'YYYY-MM-DD-HH24.MI.SS.FF9\')',
+        ["FIN7", "LGL7", "2019-01-01-00.00.00.000000000"],
     )
+
+
+def test_selection_values_are_bound_not_inlined() -> None:
+    sel = SelectionSpec(
+        key_columns=("ARCH_KEY",),
+        all_rows=False,
+        class_column="RETENTION_CLASS",
+        classes=("FIN7') OR 1=1 --",),
+        last_access_column="LAST_ACCESS_TS",
+        last_access_before="2019-01-01-00.00.00.000000000000",
+    )
+    sql, params = render_where(sel)
+    assert "OR 1=1" not in sql
+    assert params[0] == "FIN7') OR 1=1 --"
 
 
 def test_timestamp_literal_rejects_non_zero_picoseconds_and_bad_length() -> None:
     with pytest.raises(ConfigError, match="digits 10-12"):
-        timestamp_literal("2019-01-01-00.00.00.000000000123")
+        timestamp_value("2019-01-01-00.00.00.000000000123")
     with pytest.raises(ConfigError, match="not YYYY"):
-        timestamp_literal("2019-01-01")
+        timestamp_value("2019-01-01")
 
 
 @pytest.mark.parametrize("bad", ["arch_key", "1KEY", 'A"B', "A;DROP", "A B", "A" * 129])
@@ -238,11 +252,11 @@ def test_select_keys_orders_by_key_and_applies_predicate() -> None:
     assert keys == ["K1", "K2"]
     sql, params = conn.log[-1]
     assert sql == (
-        'SELECT T."ARCH_KEY" FROM "ARCHIVE"."DOCARCH" T WHERE T."RETENTION_CLASS" IN (\'FIN7\', \'LGL7\') '
-        "AND T.\"LAST_ACCESS_TS\" < TO_TIMESTAMP('2019-01-01-00.00.00.000000000', 'YYYY-MM-DD-HH24.MI.SS.FF9') "
+        'SELECT T."ARCH_KEY" FROM "ARCHIVE"."DOCARCH" T WHERE T."RETENTION_CLASS" IN (:1, :2) '
+        "AND T.\"LAST_ACCESS_TS\" < TO_TIMESTAMP(:3, 'YYYY-MM-DD-HH24.MI.SS.FF9') "
         'ORDER BY T."ARCH_KEY"'
     )
-    assert params == []
+    assert params == ["FIN7", "LGL7", "2019-01-01-00.00.00.000000000"]
 
 
 def test_fetch_range_binds_bounds_and_coerces_per_catalog_type() -> None:
@@ -275,12 +289,12 @@ def test_fetch_range_binds_bounds_and_coerces_per_catalog_type() -> None:
         }
     ]
     sql, params = conn.log[-1]
-    assert params == ["K000000000000001", "K000000000000009"]
+    assert params == ["FIN7", "LGL7", "2019-01-01-00.00.00.000000000", "K000000000000001", "K000000000000009"]
     assert sql.startswith(
         'SELECT "ARCH_KEY", TO_CHAR("STORAGE_CHARGE", \'TM9\'), "OWNER_NAME", '
         'TO_CHAR("LAST_ACCESS_TS", \'YYYY-MM-DD-HH24.MI.SS.FF9\') || \'000\' FROM "ARCHIVE"."DOCARCH" T WHERE '
     )
-    assert sql.endswith('AND T."ARCH_KEY" BETWEEN :1 AND :2 ORDER BY T."ARCH_KEY"')
+    assert sql.endswith('AND T."ARCH_KEY" BETWEEN :4 AND :5 ORDER BY T."ARCH_KEY"')
     assert "IGNORED" not in sql
 
 
