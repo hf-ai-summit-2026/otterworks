@@ -29,27 +29,8 @@ import { EmptyState } from "@/components/ui/empty-state";
 import { ErrorBoundary } from "@/components/ui/error-boundary";
 import { filesApi } from "@/lib/api";
 import { useUIStore } from "@/stores/ui-store";
-import { cn } from "@/lib/utils";
+import { cn, runDeletions } from "@/lib/utils";
 import type { ViewMode, SortField } from "@/types";
-
-// Run a delete operation over a list of ids, tallying successes and failures
-// so a single failure doesn't abort the rest of a bulk action.
-async function runDeletions(
-  ids: string[],
-  remove: (id: string) => Promise<unknown>
-): Promise<{ succeeded: number; failed: number }> {
-  let succeeded = 0;
-  let failed = 0;
-  for (const id of ids) {
-    try {
-      await remove(id);
-      succeeded++;
-    } catch {
-      failed++;
-    }
-  }
-  return { succeeded, failed };
-}
 
 function FileBrowserContent() {
   const [searchParams] = useSearchParams();

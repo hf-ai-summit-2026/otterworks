@@ -24,6 +24,8 @@ use crate::models::{
 };
 use crate::storage::S3Client;
 
+const MAX_LIST_PAGE_SIZE: u32 = 1000;
+
 // -- Health & Metrics --
 
 pub async fn health() -> HttpResponse {
@@ -244,7 +246,7 @@ pub async fn list_files(
         .await?;
 
     let page = query.page.unwrap_or(1).max(1);
-    let page_size = query.page_size.unwrap_or(50).min(100);
+    let page_size = list_page_size(query.page_size);
     let total = files.len();
     let start = (page - 1).saturating_mul(page_size) as usize;
     let paged: Vec<FileMetadata> = files
@@ -259,6 +261,10 @@ pub async fn list_files(
         page,
         page_size,
     }))
+}
+
+fn list_page_size(page_size: Option<u32>) -> u32 {
+    page_size.unwrap_or(50).min(MAX_LIST_PAGE_SIZE)
 }
 
 pub async fn list_shared_files(
@@ -710,6 +716,13 @@ pub async fn list_activity(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_list_page_size_defaults_and_caps() {
+        assert_eq!(list_page_size(None), 50);
+        assert_eq!(list_page_size(Some(500)), 500);
+        assert_eq!(list_page_size(Some(5000)), MAX_LIST_PAGE_SIZE);
+    }
 
     #[actix_rt::test]
     async fn test_health_endpoint() {

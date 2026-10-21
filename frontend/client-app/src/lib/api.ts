@@ -319,6 +319,32 @@ export const filesApi = {
     const { data } = await apiClient.put<Record<string, unknown>>(`/folders/${id}`, { name });
     return normalizeFileItem({ ...data, isFolder: true });
   },
+  listAll: async (): Promise<FileItem[]> => {
+    const PAGE_LIMIT = 1000;
+    const first = await apiClient.get<RawFileListResponse>("/files", {
+      params: { page: 1, page_size: PAGE_LIMIT },
+    });
+    const total = first.data.total ?? 0;
+    const pages = Math.ceil(total / PAGE_LIMIT);
+    const rest = await Promise.all(
+      Array.from({ length: Math.max(pages - 1, 0) }, (_, i) =>
+        apiClient.get<RawFileListResponse>("/files", {
+          params: { page: i + 2, page_size: PAGE_LIMIT },
+        }),
+      ),
+    );
+    return [first, ...rest].flatMap((res) => (res.data.files ?? []).map(mapRawFile));
+  },
+  listFolderTree: async (): Promise<FileItem[]> => {
+    const all: FileItem[] = [];
+    let level = await filesApi.listFolders(null);
+    while (level.length > 0) {
+      all.push(...level);
+      const children = await Promise.all(level.map((f) => filesApi.listFolders(f.id)));
+      level = children.flat();
+    }
+    return all;
+  },
   getRecent: async (limit = 10): Promise<FileItem[]> => {
     const params: Record<string, string | number> = { page: 1, page_size: limit };
     const { data } = await apiClient.get<RawFileListResponse>("/files", { params });
@@ -467,30 +493,9 @@ export const storageApi = {
     const fileCount = fileRes.data.total ?? 0;
     const documentCount = docRes.data.total ?? 0;
 
-    // Fetch all files to sum storage. The file-service caps page_size at 100,
-    // so paginate through all pages to get an accurate total.
-    let used = 0;
-    if (fileCount > 0) {
-      const PAGE_LIMIT = 100;
-      let page = 1;
-      let fetched = 0;
-      while (fetched < fileCount) {
-        const batch = await apiClient.get<RawFileListResponse>("/files", {
-          params: { page, page_size: PAGE_LIMIT },
-        });
-        const files = batch.data.files ?? [];
-        if (files.length === 0) break;
-        used += files.reduce(
-          (sum, f) => {
-            const raw = f as unknown as Record<string, number>;
-            return sum + (raw.sizeBytes ?? raw.size_bytes ?? 0);
-          },
-          0,
-        );
-        fetched += files.length;
-        page += 1;
-      }
-    }
+    // listAll fetches up to 1,000 files per request and fetches remaining pages in parallel.
+    const files = await filesApi.listAll();
+    const used = files.reduce((sum, file) => sum + file.size, 0);
 
     return {
       used,

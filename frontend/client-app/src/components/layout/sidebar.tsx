@@ -15,6 +15,7 @@ import {
   X,
   Plus,
   LogOut,
+  PieChart,
   type LucideIcon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -43,6 +44,7 @@ const navGroups: NavGroup[] = [
       { href: "/files", label: "Files", icon: FolderOpen },
       { href: "/documents", label: "Documents", icon: FileText },
       { href: "/search", label: "Search", icon: Search },
+      { href: "/insights", label: "Storage insights", icon: PieChart },
       { href: "/margins", label: "Margins", icon: TrendingUp },
     ],
   },

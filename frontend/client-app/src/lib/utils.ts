@@ -4,6 +4,25 @@ export function cn(...inputs: ClassValue[]) {
   return clsx(inputs);
 }
 
+// Run a delete operation over a list of ids, tallying successes and failures
+// so a single failure doesn't abort the rest of a bulk action.
+export async function runDeletions(
+  ids: string[],
+  remove: (id: string) => Promise<unknown>
+): Promise<{ succeeded: number; failed: number }> {
+  let succeeded = 0;
+  let failed = 0;
+  for (const id of ids) {
+    try {
+      await remove(id);
+      succeeded++;
+    } catch {
+      failed++;
+    }
+  }
+  return { succeeded, failed };
+}
+
 export function formatFileSize(bytes: number): string {
   if (bytes === 0) return "0 B";
   const k = 1024;
