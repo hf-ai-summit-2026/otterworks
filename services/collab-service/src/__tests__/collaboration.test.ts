@@ -91,10 +91,10 @@ describe('CollaborationManager', () => {
     });
   }, 15000);
 
-  afterAll((done) => {
-    manager.stop();
+  afterAll(async () => {
+    await manager.stop();
     io.close();
-    httpServer.close(done);
+    await new Promise<void>((resolve) => httpServer.close(() => resolve()));
   });
 
   afterEach(() => {
@@ -115,10 +115,16 @@ describe('CollaborationManager', () => {
         transports: ['websocket'],
       });
 
-      client.on('connect', () => resolve(client));
-      client.on('connect_error', (err) => reject(err));
+      const timeout = setTimeout(() => reject(new Error('Connection timeout')), 5000);
 
-      setTimeout(() => reject(new Error('Connection timeout')), 5000);
+      client.on('connect', () => {
+        clearTimeout(timeout);
+        resolve(client);
+      });
+      client.on('connect_error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
     });
   }
 
@@ -371,6 +377,38 @@ describe('CollaborationManager', () => {
 
       client1.disconnect();
       client2.disconnect();
+    });
+  });
+  describe('Malformed payloads', () => {
+    it('logs handler failures instead of crashing and keeps serving the socket', async () => {
+      const client = await connectClient('user-malformed', 'Mallory');
+
+      client.emit('join-document', null, () => {});
+      client.emit('leave-document', null);
+      client.emit('document-update', null);
+      client.emit('cursor-update', null);
+      client.emit('request-history', null);
+
+      const joined = await new Promise<{ success: boolean }>((resolve) => {
+        client.emit('join-document', { documentId: 'doc-malformed-test' }, resolve);
+      });
+      expect(joined.success).toBe(true);
+
+      const errorCalls = (mockLogger as unknown as { error: jest.Mock }).error.mock.calls;
+      const failedEvents = errorCalls
+        .filter(([, msg]) => msg === 'socket_handler_failed')
+        .map(([ctx]) => (ctx as { event: string }).event);
+      expect(failedEvents).toEqual(
+        expect.arrayContaining([
+          'join-document',
+          'leave-document',
+          'document-update',
+          'cursor-update',
+          'request-history',
+        ]),
+      );
+
+      client.disconnect();
     });
   });
 });

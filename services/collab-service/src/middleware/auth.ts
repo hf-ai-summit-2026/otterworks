@@ -1,6 +1,6 @@
+import type { IncomingMessage } from 'http';
 import jwt from 'jsonwebtoken';
-import type { Socket } from 'socket.io';
-import type { ExtendedError } from 'socket.io/dist/namespace';
+import type { ExtendedError, Socket } from 'socket.io';
 import type { Logger } from 'pino';
 
 export interface AuthenticatedUser {
@@ -24,11 +24,43 @@ interface JwtPayload {
   exp?: number;
 }
 
+export type UpgradeAuthResult = 'ok' | 'missing_token' | 'invalid_token';
+
+export function extractBearerToken(authorization?: string): string | undefined {
+  return authorization?.replace('Bearer ', '');
+}
+
+function getQueryToken(request: IncomingMessage): string | null {
+  try {
+    const url = new URL(request.url || '', `http://${request.headers.host}`);
+    return url.searchParams.get('token');
+  } catch {
+    return null;
+  }
+}
+
+export function authenticateUpgradeRequest(
+  request: IncomingMessage,
+  jwtSecret: string,
+): UpgradeAuthResult {
+  const token =
+    getQueryToken(request) || extractBearerToken(request.headers.authorization);
+
+  if (!token) return 'missing_token';
+
+  try {
+    jwt.verify(token, jwtSecret);
+    return 'ok';
+  } catch {
+    return 'invalid_token';
+  }
+}
+
 export function createAuthMiddleware(jwtSecret: string, logger: Logger) {
   return (socket: Socket, next: (err?: ExtendedError) => void): void => {
     const token =
       socket.handshake.auth?.token ||
-      socket.handshake.headers?.authorization?.replace('Bearer ', '');
+      extractBearerToken(socket.handshake.headers?.authorization);
 
     if (!token) {
       logger.warn({ socketId: socket.id }, 'connection_rejected: no token provided');

@@ -2,13 +2,12 @@ import express from 'express';
 import { createServer } from 'http';
 import { Server as SocketIOServer } from 'socket.io';
 import { WebSocketServer } from 'ws';
-import jwt from 'jsonwebtoken';
 import cors from 'cors';
 import helmet from 'helmet';
 import pino from 'pino';
 import { loadConfig } from './config';
 import { MetricsCollector } from './metrics';
-import { createAuthMiddleware } from './middleware/auth';
+import { authenticateUpgradeRequest, createAuthMiddleware } from './middleware/auth';
 import { RedisAdapter } from './services/redis-adapter';
 import { DocumentStore } from './services/document-store';
 import { AwarenessService } from './services/awareness';
@@ -142,22 +141,13 @@ httpServer.on('upgrade', (request, socket, head) => {
   }
 
   // JWT authentication for y-websocket connections
-  const url = new URL(request.url || '', `http://${request.headers.host}`);
-  const token =
-    url.searchParams.get('token') ||
-    request.headers.authorization?.replace('Bearer ', '');
-
-  if (!token) {
-    logger.warn('y-websocket_connection_rejected: no token');
-    socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
-    socket.destroy();
-    return;
-  }
-
-  try {
-    jwt.verify(token, config.jwt.secret);
-  } catch {
-    logger.warn('y-websocket_connection_rejected: invalid token');
+  const authResult = authenticateUpgradeRequest(request, config.jwt.secret);
+  if (authResult !== 'ok') {
+    logger.warn(
+      authResult === 'missing_token'
+        ? 'y-websocket_connection_rejected: no token'
+        : 'y-websocket_connection_rejected: invalid token',
+    );
     socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
     socket.destroy();
     return;

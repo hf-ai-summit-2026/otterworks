@@ -207,7 +207,9 @@ describe('DocumentStore', () => {
       expect(snapshot.documentId).toBe('doc-123');
       expect(snapshot.createdBy).toBe('user-1');
       expect(snapshot.label).toBe('Version 1');
-      expect(snapshot.id).toBeDefined();
+      expect(snapshot.id).toMatch(
+        /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+      );
       expect(snapshot.createdAt).toBeDefined();
       expect(snapshot.state).toBe(state.toString('base64'));
       expect(mockRedis.lpush).toHaveBeenCalledWith(
