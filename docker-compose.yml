@@ -533,6 +533,13 @@ services:
     read_only: true
     tmpfs:
     - /tmp
+    volumes:
+    # Writable tmpfs so the unprivileged nginx entrypoint (uid 101) can render
+    # the envsubst config template despite the read-only root filesystem.
+    - type: tmpfs
+      target: /etc/nginx/conf.d
+      tmpfs:
+        mode: 0777
   workbench:
     build:
       context: ./frontend/workbench

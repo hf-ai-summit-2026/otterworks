@@ -178,6 +178,13 @@ maintenance: |
   # The rolldown native binding is explicit: an npm optional-deps bug omits it and Vite fails.
   (cd frontend/client-app && npm install && npm install --no-save @rolldown/binding-linux-x64-gnu@1.1.5)
   (cd frontend/client-app/desktop && npm install)
+  # document-service needs Python ^3.12 (host is 3.10) for `poetry run ruff check .` / pytest.
+  command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | sh
+  export PATH="$HOME/.local/bin:$PATH"
+  uv python install 3.12
+  command -v poetry >/dev/null || uv tool install poetry
+  # --no-root: the service isn't packaged (pyproject's readme = "README.md" doesn't exist), same as its Dockerfile.
+  (cd services/document-service && poetry env use "$(uv python find 3.12)" && poetry install --no-interaction --no-root)
 knowledge:
   - name: run backend + web
     contents: |
