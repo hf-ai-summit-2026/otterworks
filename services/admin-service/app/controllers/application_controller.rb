@@ -41,7 +41,7 @@ class ApplicationController < ActionController::API
 
   def paginate(scope)
     page = [(params[:page] || 1).to_i, 1].max
-    per_page = [(params[:per_page] || 20).to_i, 100].min.clamp(1, 100)
+    per_page = (params[:per_page] || 20).to_i.clamp(1, 100)
     total = scope.count
 
     records = scope.offset((page - 1) * per_page).limit(per_page)
