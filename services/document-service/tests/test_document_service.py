@@ -3,6 +3,7 @@
 import uuid
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.document import (
@@ -237,3 +238,30 @@ async def test_paginate_helper():
     assert DocumentService.paginate(11, 1, 5) == 3
     assert DocumentService.paginate(0, 1, 5) == 1
     assert DocumentService.paginate(10, 1, 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_documents_query_count_independent_of_page_size(
+    client: AsyncClient, db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+    for i in range(12):
+        doc = await service.create(
+            DocumentCreate(title=f"Doc {i}", content="v1", owner_id=owner_id)
+        )
+        for n in range(2, 8):
+            await service.update(doc.id, DocumentUpdate(title=f"Doc {i}", content=f"v{n}"))
+
+    counts = {}
+    for size in (2, 12):
+        resp = await client.get(
+            "/api/v1/documents/", params={"owner_id": str(owner_id), "size": size}
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()["items"]) == size
+        counts[size] = int(resp.headers["X-DB-Queries"])
+    assert counts[2] == counts[12]
+
+    items, _ = await service.list_documents(owner_id=owner_id, size=12)
+    for doc in items:
+        assert [v.version_number for v in doc.recent_versions] == [7, 6, 5, 4, 3]
