@@ -237,3 +237,49 @@ async def test_paginate_helper():
     assert DocumentService.paginate(11, 1, 5) == 3
     assert DocumentService.paginate(0, 1, 5) == 1
     assert DocumentService.paginate(10, 1, 0) == 1
+
+
+async def _count_list_statements(
+    db_session: AsyncSession, owner_id: uuid.UUID, size: int
+) -> tuple[int, list]:
+    from sqlalchemy import event
+
+    statements: list[str] = []
+    sync_engine = db_session.bind.sync_engine
+
+    def _record(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        statements.append(statement)
+
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        items, _ = await DocumentService(db_session).list_documents(
+            owner_id=owner_id, size=size
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+    return len(statements), items
+
+
+@pytest.mark.asyncio
+async def test_list_documents_statement_count_is_constant(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+    for i in range(12):
+        doc = await service.create(
+            DocumentCreate(title=f"Doc {i}", content="v1", owner_id=owner_id)
+        )
+        for n in range(2, 8):
+            await service.update(doc.id, DocumentUpdate(title=f"Doc {i}", content=f"v{n}"))
+    db_session.expunge_all()
+
+    small, _ = await _count_list_statements(db_session, owner_id, size=2)
+    db_session.expunge_all()
+    large, items = await _count_list_statements(db_session, owner_id, size=12)
+
+    assert len(items) == 12
+    assert small == large
+    assert large <= 3
+    for doc in items:
+        numbers = [v.version_number for v in doc.recent_versions]
+        assert numbers == [7, 6, 5, 4, 3]
