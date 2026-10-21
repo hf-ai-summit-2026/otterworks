@@ -28,6 +28,8 @@ def index_document() -> tuple:
     data = request.get_json()
     if not data:
         return jsonify({"error": "Request body is required"}), 400
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
 
     try:
         indexer = _get_indexer()
@@ -48,6 +50,8 @@ def index_file() -> tuple:
     data = request.get_json()
     if not data:
         return jsonify({"error": "Request body is required"}), 400
+    if not isinstance(data, dict):
+        return jsonify({"error": "Request body must be a JSON object"}), 400
 
     try:
         indexer = _get_indexer()
