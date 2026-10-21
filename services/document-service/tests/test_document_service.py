@@ -3,8 +3,10 @@
 import uuid
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.models.document import Document, DocumentVersion
 from app.schemas.document import (
     CommentCreate,
     DocumentCreate,
@@ -237,3 +239,57 @@ async def test_paginate_helper():
     assert DocumentService.paginate(11, 1, 5) == 3
     assert DocumentService.paginate(0, 1, 5) == 1
     assert DocumentService.paginate(10, 1, 0) == 1
+
+
+async def _count_list_statements(
+    db_session: AsyncSession, owner_id: uuid.UUID, size: int
+) -> tuple[int, list]:
+    statements: list[str] = []
+
+    def _record(conn, cursor, statement, parameters, context, executemany):
+        statements.append(statement)
+
+    sync_engine = db_session.bind.sync_engine
+    event.listen(sync_engine, "before_cursor_execute", _record)
+    try:
+        items, _ = await DocumentService(db_session).list_documents(
+            owner_id=owner_id, size=size
+        )
+    finally:
+        event.remove(sync_engine, "before_cursor_execute", _record)
+    return len(statements), items
+
+
+@pytest.mark.asyncio
+async def test_list_documents_query_count_is_constant(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    for i in range(120):
+        doc = Document(
+            title=f"Doc {i}", content="", owner_id=owner_id, version=7
+        )
+        db_session.add(doc)
+        await db_session.flush()
+        for n in range(1, 8):
+            db_session.add(
+                DocumentVersion(
+                    document_id=doc.id,
+                    version_number=n,
+                    title=f"Doc {i} v{n}",
+                    content="",
+                    created_by=owner_id,
+                )
+            )
+    await db_session.commit()
+    db_session.expunge_all()
+
+    small_count, small_items = await _count_list_statements(db_session, owner_id, 10)
+    db_session.expunge_all()
+    large_count, large_items = await _count_list_statements(db_session, owner_id, 100)
+
+    assert len(small_items) == 10
+    assert len(large_items) == 100
+    assert small_count == large_count
+    assert large_count <= 5
+    for doc in large_items:
+        assert [v.version_number for v in doc.recent_versions] == [7, 6, 5, 4, 3]
