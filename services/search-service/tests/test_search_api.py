@@ -146,6 +146,13 @@ class TestAdvancedSearchEndpoint:
         response = client.post("/api/v1/search/advanced", json={})
         assert response.status_code == 200
 
+    def test_advanced_search_non_object_body(self, client):
+        """Advanced search with a non-object JSON body returns 400."""
+        for body in (["report"], "report", 42):
+            response = client.post("/api/v1/search/advanced", json=body)
+            assert response.status_code == 400
+            assert "error" in response.get_json()
+
 
 class TestAnalyticsEndpoint:
     """Tests for GET /api/v1/search/analytics."""
