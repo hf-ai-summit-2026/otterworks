@@ -121,7 +121,6 @@ public class DynamoDbAuditRepository : IAuditRepository
 
         if (to.HasValue)
         {
-            var tsAlias = expressionNames.ContainsKey("#ts") ? "#ts" : "#ts";
             if (!expressionNames.ContainsKey("#ts"))
                 expressionNames["#ts"] = "Timestamp";
             filterExpressions.Add("#ts <= :toTs");
