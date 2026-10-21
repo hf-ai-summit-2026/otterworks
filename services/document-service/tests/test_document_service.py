@@ -3,6 +3,7 @@
 import uuid
 
 import pytest
+from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.document import (
@@ -237,3 +238,45 @@ async def test_paginate_helper():
     assert DocumentService.paginate(11, 1, 5) == 3
     assert DocumentService.paginate(0, 1, 5) == 1
     assert DocumentService.paginate(10, 1, 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_documents_query_count_is_constant(
+    client: AsyncClient, db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+
+    async def statements_for_page() -> int:
+        resp = await client.get(
+            "/api/v1/documents/", params={"owner_id": str(owner_id), "size": 100}
+        )
+        assert resp.status_code == 200
+        return int(resp.headers["X-DB-Queries"])
+
+    for i in range(2):
+        await service.create(DocumentCreate(title=f"S{i}", content="", owner_id=owner_id))
+    small_page = await statements_for_page()
+
+    for i in range(10):
+        await service.create(DocumentCreate(title=f"L{i}", content="", owner_id=owner_id))
+    large_page = await statements_for_page()
+
+    assert small_page == large_page
+    assert large_page <= 5
+
+
+@pytest.mark.asyncio
+async def test_list_documents_attaches_five_most_recent_versions(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+    busy = await service.create(DocumentCreate(title="v1", content="", owner_id=owner_id))
+    for n in range(2, 8):
+        await service.update(busy.id, DocumentUpdate(title=f"v{n}", content=""))
+    quiet = await service.create(DocumentCreate(title="q", content="", owner_id=owner_id))
+
+    items, _ = await service.list_documents(owner_id=owner_id)
+    by_id = {doc.id: doc for doc in items}
+
+    assert [v.version_number for v in by_id[busy.id].recent_versions] == [7, 6, 5, 4, 3]
+    assert [v.version_number for v in by_id[quiet.id].recent_versions] == [1]
