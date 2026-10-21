@@ -237,3 +237,48 @@ async def test_paginate_helper():
     assert DocumentService.paginate(11, 1, 5) == 3
     assert DocumentService.paginate(0, 1, 5) == 1
     assert DocumentService.paginate(10, 1, 0) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_documents_query_count_is_constant(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    """DocumentListLatencyHigh: listing must not issue one versions query per row."""
+    from sqlalchemy import event
+
+    from tests.conftest import engine
+
+    service = DocumentService(db_session)
+    statements: list[str] = []
+
+    def _count(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        statements.append(statement)
+
+    async def _list_count(size: int) -> int:
+        db_session.expunge_all()
+        statements.clear()
+        event.listen(engine.sync_engine, "before_cursor_execute", _count)
+        try:
+            items, _ = await service.list_documents(owner_id=owner_id, size=size)
+        finally:
+            event.remove(engine.sync_engine, "before_cursor_execute", _count)
+        assert len(items) == size
+        return len(statements)
+
+    for i in range(12):
+        doc = await service.create(
+            DocumentCreate(title=f"Doc {i}", content="v1", owner_id=owner_id)
+        )
+        for v in range(2, 8):
+            await service.update(doc.id, DocumentUpdate(title=f"Doc {i}", content=f"v{v}"))
+
+    small = await _list_count(2)
+    large = await _list_count(12)
+    assert small == large
+    assert large <= 5
+
+    items, _ = await service.list_documents(owner_id=owner_id, size=12)
+    for doc in items:
+        numbers = [v.version_number for v in doc.recent_versions]
+        assert numbers == [7, 6, 5, 4, 3]
+        assert all(v.document_id == doc.id for v in doc.recent_versions)
