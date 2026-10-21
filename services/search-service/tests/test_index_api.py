@@ -49,6 +49,16 @@ class TestIndexDocumentEndpoint:
         assert response.status_code == 400
 
 
+    def test_index_document_non_object_body(self, client, mock_meilisearch_client):
+        """Index document with a non-object JSON body returns 400."""
+        response = client.post(
+            "/api/v1/search/index/document",
+            json=[{"id": "doc-123", "title": "My Document"}],
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"] == "Request body must be a JSON object"
+
+
 class TestIndexFileEndpoint:
     """Tests for POST /api/v1/search/index/file."""
 
@@ -79,6 +89,16 @@ class TestIndexFileEndpoint:
             json={"id": "file-no-name"},
         )
         assert response.status_code == 400
+
+
+    def test_index_file_non_object_body(self, client, mock_meilisearch_client):
+        """Index file with a non-object JSON body returns 400."""
+        response = client.post(
+            "/api/v1/search/index/file",
+            json=["file-123"],
+        )
+        assert response.status_code == 400
+        assert response.get_json()["error"] == "Request body must be a JSON object"
 
 
 class TestDeleteFromIndexEndpoint:
