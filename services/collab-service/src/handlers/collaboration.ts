@@ -19,6 +19,14 @@ export interface CommentAnnotation {
   parentId?: string;
 }
 
+const DEFAULT_HISTORY_LIMIT = 20;
+
+export function normalizeHistoryLimit(limit: unknown): number {
+  return Number.isInteger(limit) && (limit as number) > 0
+    ? (limit as number)
+    : DEFAULT_HISTORY_LIMIT;
+}
+
 export interface CollaborationDeps {
   io: SocketIOServer;
   documentStore: DocumentStore;
@@ -426,7 +434,10 @@ export class CollaborationManager {
     const { documentId, limit } = data;
 
     try {
-      const snapshots = await documentStore.getSnapshots(documentId, limit || 20);
+      const snapshots = await documentStore.getSnapshots(
+        documentId,
+        normalizeHistoryLimit(limit),
+      );
       socket.emit('document-history', { documentId, snapshots });
     } catch (err) {
       logger.error({ err, documentId }, 'get_history_failed');
