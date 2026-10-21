@@ -10,7 +10,7 @@
 #
 # It's strongly recommended that you check this file into your version control system.
 
-ActiveRecord::Schema[7.1].define(version: 2024_01_01_000008) do
+ActiveRecord::Schema[7.1].define(version: 2024_01_01_000009) do
   enable_extension "pgcrypto"
   enable_extension "plpgsql"
 
@@ -103,6 +103,7 @@ ActiveRecord::Schema[7.1].define(version: 2024_01_01_000008) do
     t.datetime "created_at", null: false
     t.datetime "updated_at", null: false
     t.datetime "closed_at"
+    t.index ["affected_service"], name: "index_incidents_on_active_affected_service", unique: true, where: "((status)::text = ANY ((ARRAY['open'::character varying, 'investigating'::character varying])::text[]))"
     t.index ["affected_service"], name: "index_incidents_on_affected_service"
     t.index ["devin_session_id"], name: "index_incidents_on_devin_session_id", unique: true
     t.index ["severity"], name: "index_incidents_on_severity"

@@ -39,6 +39,9 @@ class JwtAuthenticator
 
   def decode_token(token)
     secret = Rails.application.credentials.jwt_secret || ENV.fetch('JWT_SECRET', Rails.application.secrets.jwt_secret)
+    # auth-service signs with jjwt's key-length-based HMAC selection: secrets of 48-63
+    # bytes (including the 55-byte docker-compose default) produce HS384 tokens, so
+    # HS384 must stay accepted alongside HS256.
     decoded = JWT.decode(token, secret, true, algorithms: ['HS256', 'HS384'])
     decoded.first
   rescue JWT::DecodeError, JWT::ExpiredSignature, JWT::VerificationError => e

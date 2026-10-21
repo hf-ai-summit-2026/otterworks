@@ -43,8 +43,12 @@ module Api
 
         # DELETE /api/v1/admin/chaos
         def reset
-          keys = redis.keys('chaos:*')
-          redis.del(*keys) if keys.any?
+          # SCAN instead of KEYS so the reset never blocks Redis on a large keyspace.
+          keys = []
+          redis.scan_each(match: 'chaos:*', count: 100).each_slice(100) do |batch|
+            redis.del(*batch)
+            keys.concat(batch)
+          end
 
           # Resolve any open incidents for chaos-managed services so the next
           # demo run can create fresh incidents without hitting the dedup guard.
