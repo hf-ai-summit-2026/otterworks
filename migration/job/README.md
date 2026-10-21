@@ -23,7 +23,7 @@ failure, `3` purge guard, `4` configuration (manifest, token, env, type map, cop
 | `ldm/drivers/db2.py` | Db2 via `ibm_db` (SQLCODE/SQLSTATE surfaced, transactional purge with `MIGAUDIT.PURGE_AUDIT`) |
 | `ldm/drivers/postgresql.py` | PostgreSQL via `psycopg` (default target; `mig`/`stg`/`arch` in the tenant's existing database, SQLSTATE `23505` -> `DUPLICATE_KEY`) |
 | `ldm/drivers/factory.py` | picklable `TargetSpec` so Spark partitions reopen the target driver |
-| `ldm/drivers/azuresql.py` | Azure SQL via `pyodbc` + ODBC Driver 18 (SQL or managed-identity auth), optional |
+| `ldm/drivers/azuresql/` | Azure SQL via `pyodbc` + ODBC Driver 18 (SQL or managed-identity auth), optional; `AzureSqlTarget` facade over per-concern collaborators (connection, schema, ledger, key ranges, staging/rejects, validation, purge audit/reconcile) |
 | `ldm/engines/spark_load.py` | PySpark local-mode LOAD engine: bounded slices, `convert_record()` per record, duplicate/reject routing, per-partition inserts, aggregate counts only |
 | `ldm/drivers/fakes.py` | in-memory drivers used by the tests |
 | `ldm/stages/*.py` | `init`, `extract`, `load`, `validate`, `purge`, `reconcile` |

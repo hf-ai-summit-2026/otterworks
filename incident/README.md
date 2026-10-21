@@ -53,8 +53,8 @@ arming.
   climbing from ~60 ms to ~2.4 s; SQL statements per request stepping from 4 to
   104 on a 100-row page (`x-db-queries: 104`); one Jaeger trace fanning into a
   hundred identical `SELECT`s on `document_versions`.
-- **Code cause.** `DocumentService.list_documents`
-  (`services/document-service/app/services/document_service.py`) runs one
+- **Code cause.** `DocumentCrud.list_documents`
+  (`services/document-service/app/services/document_crud.py`) runs one
   versions query per document in a Python loop, and the schema lacks an index
   covering the owner listing order on `documents` and a composite index on
   `document_versions(document_id, version_number)`.

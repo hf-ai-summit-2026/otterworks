@@ -50,8 +50,8 @@ scenarios:
       page; one Jaeger trace fanning into a hundred identical SELECTs on
       document_versions.
     code_cause: >-
-      DocumentService.list_documents runs one versions query per document in a
-      Python loop (services/document-service/app/services/document_service.py),
+      DocumentCrud.list_documents runs one versions query per document in a
+      Python loop (services/document-service/app/services/document_crud.py),
       and the schema lacks an index covering the owner listing order on
       documents and a composite index on
       document_versions(document_id, version_number).
