@@ -3,7 +3,16 @@
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Text,
+)
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -16,6 +25,11 @@ def _utcnow() -> datetime:
 
 class Document(Base):
     __tablename__ = "documents"
+    __table_args__ = (
+        Index(
+            "ix_documents_owner_listing", "owner_id", "is_deleted", "is_template", "updated_at"
+        ),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4
@@ -52,6 +66,9 @@ class Document(Base):
 
 class DocumentVersion(Base):
     __tablename__ = "document_versions"
+    __table_args__ = (
+        Index("ix_document_versions_document_id_version_number", "document_id", "version_number"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         UUID(as_uuid=True), primary_key=True, default=uuid.uuid4

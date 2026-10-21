@@ -3,6 +3,7 @@
 import uuid
 
 import pytest
+from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.schemas.document import (
@@ -54,6 +55,37 @@ async def test_list_documents_with_filters(
     items, total = await service.list_documents(folder_id=folder_id)
     assert total == 1
 
+
+
+@pytest.mark.asyncio
+async def test_list_documents_query_count_is_constant(
+    db_session: AsyncSession, owner_id: uuid.UUID
+):
+    service = DocumentService(db_session)
+    sync_engine = db_session.bind.sync_engine
+    statements: list[str] = []
+
+    def _count(conn, cursor, statement, parameters, context, executemany):  # noqa: ANN001
+        statements.append(statement)
+
+    async def _list_query_count(size: int) -> int:
+        statements.clear()
+        event.listen(sync_engine, "before_cursor_execute", _count)
+        try:
+            items, _ = await service.list_documents(owner_id=owner_id, size=size)
+        finally:
+            event.remove(sync_engine, "before_cursor_execute", _count)
+        assert len(items) == size
+        assert all(len(doc.recent_versions) == 1 for doc in items)
+        return len(statements)
+
+    for i in range(10):
+        await service.create(DocumentCreate(title=f"Doc {i}", content="", owner_id=owner_id))
+    db_session.expunge_all()
+    small = await _list_query_count(2)
+    db_session.expunge_all()
+    large = await _list_query_count(10)
+    assert small == large
 
 @pytest.mark.asyncio
 async def test_update_creates_version(db_session: AsyncSession, owner_id: uuid.UUID):
