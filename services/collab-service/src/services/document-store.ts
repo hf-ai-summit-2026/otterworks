@@ -5,6 +5,7 @@ import { RedisAdapter } from './redis-adapter';
 const DOC_STATE_KEY = 'doc:state:';
 const DOC_SNAPSHOTS_KEY = 'doc:snapshots:';
 const DOC_META_KEY = 'doc:meta:';
+const DEFAULT_SNAPSHOT_LIMIT = 20;
 
 export interface DocumentSnapshot {
   id: string;
@@ -132,10 +133,22 @@ export class DocumentStore {
     return snapshot;
   }
 
-  async getSnapshots(documentId: string, limit = 20): Promise<DocumentSnapshot[]> {
+  async getSnapshots(
+    documentId: string,
+    limit = DEFAULT_SNAPSHOT_LIMIT,
+  ): Promise<DocumentSnapshot[]> {
     const key = `${DOC_SNAPSHOTS_KEY}${documentId}`;
-    const raw = await this.redis.lrange(key, 0, limit - 1);
+    const raw = await this.redis.lrange(key, 0, this.normalizeSnapshotLimit(limit) - 1);
     return raw.map((item) => JSON.parse(item) as DocumentSnapshot);
+  }
+
+  // Non-positive or non-numeric limits would otherwise become LRANGE stop indexes like
+  // -1 (whole list) or NaN (Redis error), so fall back to the default and cap at the list size.
+  private normalizeSnapshotLimit(limit: unknown): number {
+    if (typeof limit !== 'number' || !Number.isFinite(limit) || limit < 1) {
+      return Math.min(DEFAULT_SNAPSHOT_LIMIT, this.maxSnapshots);
+    }
+    return Math.min(Math.floor(limit), this.maxSnapshots);
   }
 
   async getSnapshotState(

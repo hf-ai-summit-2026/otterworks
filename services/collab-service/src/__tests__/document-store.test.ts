@@ -277,6 +277,41 @@ describe('DocumentStore', () => {
 
       expect(result).toEqual([]);
     });
+
+    it('should use the default limit when none is given', async () => {
+      mockRedis.lrange.mockResolvedValue([]);
+
+      await store.getSnapshots('doc-123');
+
+      expect(mockRedis.lrange).toHaveBeenCalledWith('doc:snapshots:doc-123', 0, 19);
+    });
+
+    it.each([0, -1, -100, NaN, Infinity, '5', null])(
+      'should fall back to the default limit for invalid limit %p',
+      async (limit) => {
+        mockRedis.lrange.mockResolvedValue([]);
+
+        await store.getSnapshots('doc-123', limit as number);
+
+        expect(mockRedis.lrange).toHaveBeenCalledWith('doc:snapshots:doc-123', 0, 19);
+      },
+    );
+
+    it('should cap the limit at maxSnapshots', async () => {
+      mockRedis.lrange.mockResolvedValue([]);
+
+      await store.getSnapshots('doc-123', 1000);
+
+      expect(mockRedis.lrange).toHaveBeenCalledWith('doc:snapshots:doc-123', 0, 49);
+    });
+
+    it('should floor fractional limits', async () => {
+      mockRedis.lrange.mockResolvedValue([]);
+
+      await store.getSnapshots('doc-123', 3.7);
+
+      expect(mockRedis.lrange).toHaveBeenCalledWith('doc:snapshots:doc-123', 0, 2);
+    });
   });
 
   describe('getSnapshotState', () => {
