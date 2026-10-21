@@ -105,15 +105,12 @@ class DocumentService:
         result = await self.db.execute(query)
         documents = list(result.scalars().all())
 
-        # TODO: This is slow for large result sets (ETL-445, deferred Q2 2024)
+        # versions is eager-loaded with the page (lazy="selectin"), so take the
+        # recent ones from memory rather than querying once per document.
         for doc in documents:
-            ver_result = await self.db.execute(
-                select(DocumentVersion)
-                .where(DocumentVersion.document_id == doc.id)
-                .order_by(DocumentVersion.version_number.desc())
-                .limit(5)
-            )
-            doc.recent_versions = list(ver_result.scalars().all())
+            doc.recent_versions = sorted(
+                doc.versions, key=lambda v: v.version_number, reverse=True
+            )[:5]
 
         return documents, total
 
