@@ -125,6 +125,11 @@ describe('PresenceHandler', () => {
         socketId: 's1',
         userId: 'u1',
       });
+      const [expiredAt] = socket.emit.mock.invocationCallOrder;
+      const [leftRoomAt] = socket.leave.mock.invocationCallOrder;
+      const [userLeftAt] = socket.roomEmit.mock.invocationCallOrder;
+      expect(expiredAt).toBeLessThan(leftRoomAt);
+      expect(leftRoomAt).toBeLessThan(userLeftAt);
       expect(roomEmit).toHaveBeenCalledWith(
         'presence-update',
         expect.objectContaining({ documentId: 'doc-1', count: 0 }),
