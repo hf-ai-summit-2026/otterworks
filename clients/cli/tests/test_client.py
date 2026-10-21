@@ -4,7 +4,7 @@ import stat
 import httpx
 import pytest
 
-from otter_cli.client import OtterClient, SessionExpiredError, normalize_keys
+from otter_cli.client import ApiError, OtterClient, SessionExpiredError, normalize_keys
 from otter_cli.config import (
     Credentials,
     credentials_path,
@@ -137,3 +137,15 @@ def test_stream_download_rewrites_host_and_yields_bytes(monkeypatch):
     assert requests[0].port == 4566
     assert requests[0].path == "/bucket/file"
     assert requests[0].query == b"X-Amz-Signature=test"
+
+
+def test_stream_download_error_reports_status(monkeypatch):
+    monkeypatch.delenv("OTTER_DOWNLOAD_HOST", raising=False)
+    transport = httpx.MockTransport(
+        lambda request: httpx.Response(403, json={"message": "SignatureDoesNotMatch"})
+    )
+    client = OtterClient(api_url="http://otter.test", transport=transport, credentials=None)
+    with pytest.raises(ApiError) as error:
+        list(client.stream_download("http://s3.test/bucket/key"))
+    assert error.value.status_code == 403
+    assert "SignatureDoesNotMatch" in error.value.message

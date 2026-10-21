@@ -261,6 +261,8 @@ class OtterClient:
                 (parts.scheme, download_host, parts.path, parts.query, parts.fragment)
             )
         with self._http.stream("GET", url, timeout=60) as response:
+            if not response.is_success:
+                response.read()
             self._raise_for_status(response)
             yield from response.iter_bytes()
 
