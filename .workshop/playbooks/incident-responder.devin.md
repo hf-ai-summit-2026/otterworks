@@ -87,8 +87,8 @@ alert name and the time it fired); do not ask what to do next.
    the thread of the alert message — not a new message, not a DM.
 8. **Open the PR.** Title it after the alert. The body carries the RCA, the
    two gate summary lines (before red → after green), the report file names and
-   the before/after browser recording (embed the video file path so it uploads
-   to the PR), and states plainly that the load profile and thresholds came from the
+   the before/after browser recording (converted to an animated WebP and
+   embedded as an image; PR bodies reject raw video), and states plainly that the load profile and thresholds came from the
    repository's scenario catalog. Work on your own branch; never push to the
    branch that carries the reproducible before-state. The PR's base is the
    alert's `fix_branch` label when it carries one (the long-lived tenant branch

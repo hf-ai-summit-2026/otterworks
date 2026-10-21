@@ -202,8 +202,9 @@ make arm SCENARIO=n-plus-one  # load must be running while you record
   same URL: the batched fix brings the same request to 5 statements and a
   fraction of the before time. One recording with both halves, or two short
   ones, labelled before/after.
-- Attach the recording to the PR (embed the video file path in the PR body or a
-  PR comment so it uploads) next to the Grafana and Jaeger screenshots, with one
+- Attach the recording to the PR next to the Grafana and Jaeger screenshots.
+  PR bodies reject raw video, so convert it to an animated WebP first
+  (`ffmpeg -i before-after.mp4 -vf fps=8,scale=960:-1 -loop 0 -c:v libwebp_anim -q:v 60 before-after.webp`) and embed the `.webp` path as an image, with one
   line: `/documents: <before ms>, <before> statements -> <after ms>, <after> statements`.
 
 ## The page and the automation
