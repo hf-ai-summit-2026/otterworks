@@ -128,7 +128,7 @@ make demo-verify-clean NS=<token>
 
 Tables, key and hash columns, selection, type overrides and the purge flag live in the manifest;
 the source driver, unload command and copybook directory, and the target provider and credentials
-are configuration. The target provider is a driver (`job/ldm/drivers/postgresql.py`, `azuresql.py`) plus a
+are configuration. The target provider is a driver (`job/ldm/drivers/postgresql.py`, `azuresql/`) plus a
 type map and DDL directory; a different pair (for example Oracle -> PostgreSQL) is a manifest,
 type map and driver change, not a rewrite of the stages.
 
