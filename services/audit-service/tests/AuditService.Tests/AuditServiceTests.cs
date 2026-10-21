@@ -198,6 +198,67 @@ public class AuditServiceTests
     }
 
     [Fact]
+    public async Task GetUserActivityReportAsync_ShouldExcludeEventsOutsidePeriod()
+    {
+        var recent = CreateSampleEvent("e1");
+        var old = CreateSampleEvent("e2");
+        old.Timestamp = DateTime.UtcNow.AddDays(-10);
+
+        _mockRepository.Setup(r => r.GetAllUserEventsAsync("user-1"))
+            .ReturnsAsync(new List<AuditEvent> { recent, old });
+
+        var report = await _service.GetUserActivityReportAsync("user-1", "7d");
+
+        Assert.Equal(1, report.TotalEvents);
+        Assert.Equal("e1", Assert.Single(report.RecentEvents).Id);
+    }
+
+    [Fact]
+    public async Task GetComplianceReportAsync_ShouldFlagUsersAboveSuspiciousThreshold()
+    {
+        var events = new List<AuditEvent>();
+        for (var i = 0; i < 150; i++)
+        {
+            events.Add(CreateSampleEvent($"heavy-{i}", userId: "heavy-user"));
+        }
+
+        for (var u = 0; u < 9; u++)
+        {
+            events.Add(CreateSampleEvent($"light-{u}", userId: $"light-user-{u}"));
+        }
+
+        _mockRepository
+            .Setup(r => r.GetEventsByDateRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>()))
+            .ReturnsAsync(events);
+
+        var report = await _service.GetComplianceReportAsync("30d");
+
+        var flagged = Assert.Single(report.SuspiciousActivities);
+        Assert.Equal("heavy-user", flagged.UserId);
+        Assert.Equal(150, flagged.EventCount);
+    }
+
+    [Fact]
+    public async Task GetComplianceReportAsync_ShouldNotFlagUsersBelowMinimumThreshold()
+    {
+        var events = new List<AuditEvent>();
+        for (var i = 0; i < 100; i++)
+        {
+            events.Add(CreateSampleEvent($"e-{i}", userId: "busy-user"));
+        }
+
+        events.Add(CreateSampleEvent("quiet", userId: "quiet-user"));
+
+        _mockRepository
+            .Setup(r => r.GetEventsByDateRangeAsync(It.IsAny<DateTime>(), It.IsAny<DateTime>()))
+            .ReturnsAsync(events);
+
+        var report = await _service.GetComplianceReportAsync("30d");
+
+        Assert.Empty(report.SuspiciousActivities);
+    }
+
+    [Fact]
     public async Task ExportAsync_ShouldDelegateToArchiver()
     {
         var from = DateTime.UtcNow.AddDays(-7);
